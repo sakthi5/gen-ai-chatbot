@@ -7,6 +7,7 @@ llm = ChatGroq(
     api_key=GROQ_API_KEY,
     model="llama-3.3-70b-versatile",
     temperature=0.7,
+    streaming=True,
 )
 
 # ChatGroq

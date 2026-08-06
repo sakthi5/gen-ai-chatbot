@@ -1,13 +1,11 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
-from app.llm import llm
+from app.models import ChatRequest
+from app.services.chat_service import (
+    chat_service,
+    clear_chat_service,
+)
 
 app = FastAPI()
-
-
-class ChatRequest(BaseModel):
-    message: str
-
 
 @app.get("/")
 def home():
@@ -15,12 +13,20 @@ def home():
         "message": "Welcome to Gen AI Chatbot API"
     }
 
-
 @app.post("/chat")
 def chat(request: ChatRequest):
 
-    response = llm.invoke(request.message)
+    reply = chat_service(request.message)
 
     return {
-        "reply": response.content
+        "reply": reply
+    }
+
+@app.post("/clear")
+def clear_chat():
+
+    clear_chat_service()
+
+    return {
+        "message": "Conversation cleared."
     }

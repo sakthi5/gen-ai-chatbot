@@ -17,6 +17,9 @@ __pycache__/
 # Logs
 *.log
 
+# Local SQLite database
+*.db
+
 
 # File/Folder	Reason
 # .venv/	    Don't upload installed packages

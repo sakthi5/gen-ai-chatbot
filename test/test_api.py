@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import app
 from app.database import Base, get_db
+from app.services.chat_service import build_conversation_title
 
 
 # Use an isolated in-memory SQLite database for tests instead of chatbot.db.
@@ -93,6 +94,33 @@ def test_conversation_history_round_trip():
 
     roles = [m["role"] for m in messages]
     assert roles == ["user", "assistant", "user", "assistant"]
+
+
+def test_build_conversation_title_short_message():
+    assert build_conversation_title("what is my name") == "What is my name"
+
+
+def test_build_conversation_title_truncates_long_message():
+    title = build_conversation_title(
+        "Explain FastAPI and its features in a lot more detail than usual"
+    )
+    assert title.endswith("...")
+    assert len(title) <= 43  # 40 chars + "..."
+    assert not title.endswith(" ...")  # no dangling space before the ellipsis
+
+
+def test_build_conversation_title_collapses_whitespace():
+    assert build_conversation_title("  hi\nam   sakthi  ") == "Hi am sakthi"
+
+
+def test_chat_sets_title_from_first_message():
+    response = client.post("/chat", json={"message": "what is my name"})
+    conversation_id = response.headers["X-Conversation-ID"]
+
+    conversations = client.get("/conversations").json()
+    convo = next(c for c in conversations if c["id"] == conversation_id)
+
+    assert convo["title"] == "What is my name"
 
 
 def test_list_and_delete_conversation():

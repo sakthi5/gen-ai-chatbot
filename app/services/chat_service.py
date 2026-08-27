@@ -148,6 +148,35 @@ def delete_conversation(db, conversation_id):
     db.commit()
 
 
+TITLE_MAX_LENGTH = 40
+
+
+def build_conversation_title(message: str) -> str:
+    """Turn a raw first message into a clean, display-ready title.
+
+    Collapses whitespace/newlines, capitalizes the first letter, and
+    truncates long messages at a word boundary with an ellipsis instead
+    of showing the message verbatim.
+    """
+
+    text = " ".join(message.split())
+
+    if not text:
+        return "New Chat"
+
+    text = text[0].upper() + text[1:]
+
+    if len(text) <= TITLE_MAX_LENGTH:
+        return text.rstrip(" .,!?")
+
+    truncated = text[:TITLE_MAX_LENGTH]
+
+    if " " in truncated:
+        truncated = truncated.rsplit(" ", 1)[0]
+
+    return truncated.rstrip(" .,!?") + "..."
+
+
 def maybe_set_conversation_title(db, conversation_id, first_message: str):
     """Auto-title a conversation from its first user message, once."""
 
@@ -159,11 +188,6 @@ def maybe_set_conversation_title(db, conversation_id, first_message: str):
 
     if conversation and conversation.title == "New Chat":
 
-        title = first_message.strip().replace("\n", " ")
-
-        if len(title) > 40:
-            title = title[:40].rstrip() + "..."
-
-        conversation.title = title or "New Chat"
+        conversation.title = build_conversation_title(first_message)
 
         db.commit()

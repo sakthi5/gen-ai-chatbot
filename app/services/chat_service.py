@@ -1,36 +1,169 @@
-from langchain_core.messages import (
-    HumanMessage,
-    AIMessage,
-    SystemMessage,
-)
+from langchain_core.messages import (HumanMessage, AIMessage, SystemMessage,)
+from app.models import Message, Conversation
 
 from app.llm import llm
 from app.prompts import SYSTEM_PROMPT
-
-conversation_history = [
-    SystemMessage(content=SYSTEM_PROMPT)
-]
+import uuid
 
 
-def chat_service(message: str):
+def chat_service(message: str, db, conversation_id: str):
+    """Stream an assistant reply for `message` and persist both sides to the DB.
 
-    conversation_history.append(
+    Conversation memory is loaded fresh from the database on every call, so
+    there is no in-memory/global history to keep in sync across requests.
+    """
+
+    history = load_conversation_history(
+        db,
+        conversation_id
+    )
+
+    is_first_message = len(history) == 1  # only the system prompt so far
+
+    history.append(
         HumanMessage(content=message)
     )
 
-    response = llm.invoke(conversation_history)
+    if is_first_message:
+        maybe_set_conversation_title(db, conversation_id, message)
 
-    conversation_history.append(
-        AIMessage(content=response.content)
+    user_message = Message(
+        conversation_id=conversation_id,
+        role="user",
+        content=message
     )
 
-    return response.content
+    db.add(user_message)
+    db.commit()
 
+    full_response = ""
 
-def clear_chat_service():
+    try:
+        for chunk in llm.stream(history):
 
-    global conversation_history
+            if chunk.content:
 
-    conversation_history = [
+                full_response += chunk.content
+
+                yield chunk.content
+
+    except Exception as exc:
+
+        # Persist whatever we managed to stream before the failure, so the
+        # conversation history stays consistent, then surface the error.
+        error_note = f"\n\n_[Error: response interrupted — {exc}]_"
+        full_response += error_note
+        yield error_note
+
+    finally:
+
+        if full_response.strip():
+
+            assistant_message = Message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=full_response
+            )
+
+            db.add(assistant_message)
+            db.commit()
+
+def load_conversation_history(db, conversation_id):
+
+    messages = (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(Message.id)
+        .all()
+    )
+
+    history = [
         SystemMessage(content=SYSTEM_PROMPT)
     ]
+
+    for message in messages:
+
+        if message.role == "user":
+
+            history.append(
+                HumanMessage(content=message.content)
+            )
+
+        elif message.role == "assistant":
+
+            history.append(
+                AIMessage(content=message.content)
+            )
+
+    return history
+
+def create_conversation(db, title="New Chat"):
+
+    conversation_id = str(uuid.uuid4())
+
+    conversation = Conversation(
+        id=conversation_id,
+        title=title
+    )
+
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+
+    return conversation
+
+
+def list_conversations(db):
+    """Return all conversations, most recently created first."""
+
+    return (
+        db.query(Conversation)
+        .order_by(Conversation.created_at.desc())
+        .all()
+    )
+
+
+def get_conversation_messages(db, conversation_id):
+    """Return the raw message rows for a conversation, oldest first."""
+
+    return (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(Message.id)
+        .all()
+    )
+
+
+def delete_conversation(db, conversation_id):
+    """Delete a conversation and all of its messages."""
+
+    db.query(Message).filter(
+        Message.conversation_id == conversation_id
+    ).delete()
+
+    db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).delete()
+
+    db.commit()
+
+
+def maybe_set_conversation_title(db, conversation_id, first_message: str):
+    """Auto-title a conversation from its first user message, once."""
+
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+
+    if conversation and conversation.title == "New Chat":
+
+        title = first_message.strip().replace("\n", " ")
+
+        if len(title) > 40:
+            title = title[:40].rstrip() + "..."
+
+        conversation.title = title or "New Chat"
+
+        db.commit()

@@ -1,11 +1,31 @@
-from fastapi import FastAPI
-from app.models import ChatRequest
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+
+from app.models import ChatRequest, Conversation
 from app.services.chat_service import (
     chat_service,
-    clear_chat_service,
+    create_conversation,
+    list_conversations,
+    get_conversation_messages,
+    delete_conversation,
+)
+from app.database import engine, Base, get_db
+
+app = FastAPI(title="Gen AI Chatbot API")
+
+# Allow the Streamlit frontend (or any local dev client) to call the API.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Conversation-ID"],
 )
 
-app = FastAPI()
+Base.metadata.create_all(bind=engine)
+
 
 @app.get("/")
 def home():
@@ -13,20 +33,98 @@ def home():
         "message": "Welcome to Gen AI Chatbot API"
     }
 
+
 @app.post("/chat")
-def chat(request: ChatRequest):
+def chat(
+    request: ChatRequest,
+    db=Depends(get_db)
+):
+    if not request.message or not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-    reply = chat_service(request.message)
+    conversation_id = request.conversation_id
 
-    return {
-        "reply": reply
-    }
+    if conversation_id is None:
 
-@app.post("/clear")
-def clear_chat():
+        conversation = create_conversation(db)
 
-    clear_chat_service()
+        conversation_id = conversation.id
 
-    return {
-        "message": "Conversation cleared."
-    }
+    else:
+
+        exists = (
+            db.query(Conversation)
+            .filter(Conversation.id == conversation_id)
+            .first()
+        )
+
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    return StreamingResponse(
+        chat_service(
+            request.message,
+            db,
+            conversation_id
+        ),
+        media_type="text/plain",
+        headers={
+            "X-Conversation-ID": conversation_id
+        }
+    )
+
+
+@app.get("/conversations")
+def get_conversations(db=Depends(get_db)):
+
+    conversations = list_conversations(db)
+
+    return [
+        {
+            "id": c.id,
+            "title": c.title,
+            "created_at": c.created_at,
+        }
+        for c in conversations
+    ]
+
+
+@app.get("/conversations/{conversation_id}/messages")
+def get_messages(conversation_id: str, db=Depends(get_db)):
+
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    messages = get_conversation_messages(db, conversation_id)
+
+    return [
+        {
+            "role": m.role,
+            "content": m.content,
+            "created_at": m.created_at,
+        }
+        for m in messages
+    ]
+
+
+@app.delete("/conversations/{conversation_id}")
+def remove_conversation(conversation_id: str, db=Depends(get_db)):
+
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    delete_conversation(db, conversation_id)
+
+    return {"message": "Conversation deleted."}

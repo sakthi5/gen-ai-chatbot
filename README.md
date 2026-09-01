@@ -63,10 +63,17 @@ Get a free key at [console.groq.com](https://console.groq.com/).
 ### 4. Run the backend
 
 ```bash
-uvicorn app.api:app --reload
+uvicorn app.api:app --reload --port 8020
 ```
 
-The API will be available at `http://127.0.0.1:8000`.
+The API will be available at `http://127.0.0.1:8020`.
+
+> Port 8020 was picked to avoid colliding with the very common default of
+> 8000 (used by plenty of other FastAPI/uvicorn projects). If 8020 is also
+> taken on your machine, run on a different port and point the frontend at
+> it: `set CHATBOT_API_URL=http://127.0.0.1:<port>` (Windows) or
+> `export CHATBOT_API_URL=http://127.0.0.1:<port>` (macOS/Linux) before
+> starting Streamlit.
 
 ### 5. Run the frontend
 

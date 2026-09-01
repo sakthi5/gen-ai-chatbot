@@ -1,7 +1,10 @@
+import os
 import streamlit as st
 import requests
 
-API_URL = "http://127.0.0.1:8000"
+# Overridable via env var in case 8020 is also taken on your machine, e.g.:
+#   API_URL=http://127.0.0.1:8030 streamlit run ui/streamlit_app.py
+API_URL = os.getenv("CHATBOT_API_URL", "http://127.0.0.1:8020")
 
 st.set_page_config(
     page_title="Gen AI Chatbot",

@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import app
 from app.database import Base, get_db
-from app.services.chat_service import build_conversation_title
+from app.services.chat_service import build_conversation_title, generate_smart_title
 
 
 # Use an isolated in-memory SQLite database for tests instead of chatbot.db.
@@ -46,6 +46,10 @@ def fake_llm_stream(monkeypatch):
         def stream(self, _messages):
             yield FakeChunk("Hello ")
             yield FakeChunk("world!")
+
+        def invoke(self, _messages):
+            # Stands in for the LLM-generated title call.
+            return FakeChunk("Fake Smart Title")
 
     monkeypatch.setattr("app.services.chat_service.llm", FakeLLM())
 
@@ -113,14 +117,28 @@ def test_build_conversation_title_collapses_whitespace():
     assert build_conversation_title("  hi\nam   sakthi  ") == "Hi am sakthi"
 
 
-def test_chat_sets_title_from_first_message():
-    response = client.post("/chat", json={"message": "what is my name"})
+def test_chat_sets_title_from_llm_summary():
+    """With a working LLM, the title comes from the summarizer, not the raw message."""
+
+    response = client.post("/chat", json={"message": "What is RAG?"})
     conversation_id = response.headers["X-Conversation-ID"]
 
     conversations = client.get("/conversations").json()
     convo = next(c for c in conversations if c["id"] == conversation_id)
 
-    assert convo["title"] == "What is my name"
+    assert convo["title"] == "Fake Smart Title"
+
+
+def test_generate_smart_title_falls_back_on_llm_failure(monkeypatch):
+    """If the summarizer call fails, we fall back to the simple truncation."""
+
+    class BrokenLLM:
+        def invoke(self, _messages):
+            raise RuntimeError("Groq is down")
+
+    monkeypatch.setattr("app.services.chat_service.llm", BrokenLLM())
+
+    assert generate_smart_title("What is RAG?") is None
 
 
 def test_list_and_delete_conversation():

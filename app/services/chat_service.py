@@ -24,9 +24,6 @@ def chat_service(message: str, db, conversation_id: str):
         HumanMessage(content=message)
     )
 
-    if is_first_message:
-        maybe_set_conversation_title(db, conversation_id, message)
-
     user_message = Message(
         conversation_id=conversation_id,
         role="user",
@@ -67,6 +64,11 @@ def chat_service(message: str, db, conversation_id: str):
 
             db.add(assistant_message)
             db.commit()
+
+        # Title the conversation after the reply is in, so generating it
+        # never delays the first streamed token of the visible answer.
+        if is_first_message:
+            maybe_set_conversation_title(db, conversation_id, message)
 
 def load_conversation_history(db, conversation_id):
 
@@ -177,8 +179,51 @@ def build_conversation_title(message: str) -> str:
     return truncated.rstrip(" .,!?") + "..."
 
 
+TITLE_PROMPT = (
+    "Summarize the user's message as a short chat title of 2 to 5 words. "
+    "Respond with the title only — no quotes, no punctuation at the end, "
+    "no explanation."
+)
+
+
+def generate_smart_title(message: str):
+    """Ask the LLM to summarize the topic into a short title.
+
+    Returns the cleaned title, or None if the call fails or the model
+    returns something unusable — callers should fall back to
+    `build_conversation_title` in that case.
+    """
+
+    try:
+        response = llm.invoke([
+            SystemMessage(content=TITLE_PROMPT),
+            HumanMessage(content=message),
+        ])
+
+        title = (response.content or "").strip().strip('"').strip("'")
+        title = " ".join(title.split())
+
+        if not title:
+            return None
+
+        # Guard against the model ignoring the length instruction.
+        if len(title) > TITLE_MAX_LENGTH:
+            title = build_conversation_title(title)
+
+        return title[0].upper() + title[1:]
+
+    except Exception:
+        # Title generation is a nice-to-have — never let it break the chat.
+        return None
+
+
 def maybe_set_conversation_title(db, conversation_id, first_message: str):
-    """Auto-title a conversation from its first user message, once."""
+    """Auto-title a conversation from its first user message, once.
+
+    Tries an LLM-generated summary first (e.g. "What is RAG?" ->
+    "Understanding RAG"); falls back to a cleaned/truncated version of
+    the raw message if that call fails for any reason.
+    """
 
     conversation = (
         db.query(Conversation)
@@ -188,6 +233,8 @@ def maybe_set_conversation_title(db, conversation_id, first_message: str):
 
     if conversation and conversation.title == "New Chat":
 
-        conversation.title = build_conversation_title(first_message)
+        title = generate_smart_title(first_message) or build_conversation_title(first_message)
+
+        conversation.title = title
 
         db.commit()

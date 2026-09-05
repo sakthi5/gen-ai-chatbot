@@ -10,7 +10,8 @@ A full-stack AI chatbot built with **FastAPI**, **Streamlit**, **LangChain**, an
 - 🗂️ **Multiple conversations** — a sidebar lists past chats, auto-titled from your first message, with the ability to switch between or delete them
 - ➕ **New Chat** — start a fresh conversation at any time
 - 🛡️ **Error handling** — backend validates input and surfaces clean errors; the UI reports connection/streaming failures instead of crashing
-- 🧪 **Tested** — a pytest suite covers the API's chat, history, and conversation-management endpoints (with the LLM stubbed out, so tests don't burn real API calls)
+- 📎 **Document Q&A** — attach a PDF, TXT, or DOCX file to a conversation and ask questions about it; the extracted text is added to that conversation's context
+- 🧪 **Tested** — a pytest suite covers the API's chat, history, conversation-management, and document endpoints (with the LLM stubbed out, so tests don't burn real API calls)
 
 ## Project Status
 
@@ -23,7 +24,8 @@ ui/streamlit_app.py   →  Streamlit frontend (chat UI + sidebar)
         │  HTTP (requests, streamed)
         ▼
 app/api.py             →  FastAPI backend (routes)
-app/services/chat_service.py → chat + conversation logic
+app/services/chat_service.py     → chat + conversation logic
+app/services/document_service.py → PDF/TXT/DOCX text extraction
 app/llm.py              →  Groq LLM client (LangChain)
 app/models.py           →  Pydantic request schema + SQLAlchemy models
 app/database.py         →  SQLAlchemy engine/session (SQLite)
@@ -102,7 +104,20 @@ Tests stub out the Groq LLM call and use an isolated in-memory database, so they
 | `POST` | `/chat` | Send a message, stream back the AI's reply |
 | `GET` | `/conversations` | List all conversations |
 | `GET` | `/conversations/{id}/messages` | Get a conversation's full message history |
-| `DELETE` | `/conversations/{id}` | Delete a conversation and its messages |
+| `POST` | `/conversations` | Create a new, empty conversation |
+| `POST` | `/conversations/{id}/documents` | Upload a PDF/TXT/DOCX file to attach to a conversation |
+| `GET` | `/conversations/{id}/documents` | List documents attached to a conversation |
+| `DELETE` | `/conversations/{id}` | Delete a conversation and its messages/documents |
+
+### Document Q&A
+
+Attach a file in the "📎 Attach a document" section above the chat box. Its
+text is extracted and added to that conversation's context — every question
+you ask afterward can reference it. This is the "whole document in context"
+approach (not chunked retrieval/RAG), so it works best for documents up to a
+few thousand words; very long documents are truncated (see
+`MAX_DOCUMENT_CHARACTERS` in `app/services/document_service.py`) to leave
+room for the actual conversation.
 
 ## Screenshots
 

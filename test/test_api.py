@@ -34,24 +34,32 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+class FakeChunk:
+    def __init__(self, content):
+        self.content = content
+
+
+class FakeLLM:
+    def __init__(self):
+        self.last_stream_messages = None
+
+    def stream(self, messages):
+        self.last_stream_messages = messages
+        yield FakeChunk("Hello ")
+        yield FakeChunk("world!")
+
+    def invoke(self, _messages):
+        # Stands in for the LLM-generated title call.
+        return FakeChunk("Fake Smart Title")
+
+
 @pytest.fixture(autouse=True)
-def fake_llm_stream(monkeypatch):
+def fake_llm(monkeypatch):
     """Avoid real Groq API calls in tests by stubbing the LLM entirely."""
 
-    class FakeChunk:
-        def __init__(self, content):
-            self.content = content
-
-    class FakeLLM:
-        def stream(self, _messages):
-            yield FakeChunk("Hello ")
-            yield FakeChunk("world!")
-
-        def invoke(self, _messages):
-            # Stands in for the LLM-generated title call.
-            return FakeChunk("Fake Smart Title")
-
-    monkeypatch.setattr("app.services.chat_service.llm", FakeLLM())
+    fake = FakeLLM()
+    monkeypatch.setattr("app.services.chat_service.llm", fake)
+    return fake
 
 
 def test_home():
@@ -153,3 +161,63 @@ def test_list_and_delete_conversation():
 
     messages_after_delete = client.get(f"/conversations/{conversation_id}/messages")
     assert messages_after_delete.status_code == 404
+
+
+def test_create_empty_conversation():
+    response = client.post("/conversations")
+    assert response.status_code == 200
+    assert response.json()["title"] == "New Chat"
+
+
+def test_upload_document_and_list_it():
+    conversation_id = client.post("/conversations").json()["id"]
+
+    upload = client.post(
+        f"/conversations/{conversation_id}/documents",
+        files={"file": ("notes.txt", b"The secret word is banana.", "text/plain")},
+    )
+
+    assert upload.status_code == 200
+    body = upload.json()
+    assert body["filename"] == "notes.txt"
+    assert body["characters_extracted"] == len("The secret word is banana.")
+
+    documents = client.get(f"/conversations/{conversation_id}/documents").json()
+    assert len(documents) == 1
+    assert documents[0]["filename"] == "notes.txt"
+
+
+def test_upload_unsupported_document_type_returns_400():
+    conversation_id = client.post("/conversations").json()["id"]
+
+    upload = client.post(
+        f"/conversations/{conversation_id}/documents",
+        files={"file": ("archive.zip", b"whatever", "application/zip")},
+    )
+
+    assert upload.status_code == 400
+
+
+def test_upload_document_to_unknown_conversation_returns_404():
+    upload = client.post(
+        "/conversations/does-not-exist/documents",
+        files={"file": ("notes.txt", b"hello", "text/plain")},
+    )
+    assert upload.status_code == 404
+
+
+def test_chat_includes_attached_document_in_llm_context(fake_llm):
+    conversation_id = client.post("/conversations").json()["id"]
+
+    client.post(
+        f"/conversations/{conversation_id}/documents",
+        files={"file": ("notes.txt", b"The secret word is banana.", "text/plain")},
+    )
+
+    client.post(
+        "/chat",
+        json={"message": "What's the secret word?", "conversation_id": conversation_id},
+    )
+
+    sent_contents = [m.content for m in fake_llm.last_stream_messages]
+    assert any("The secret word is banana." in c for c in sent_contents)

@@ -36,9 +36,28 @@ if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = None
 
 
+if "uploaded_doc_signature" not in st.session_state:
+    st.session_state.uploaded_doc_signature = None
+
+
 def start_new_chat():
     st.session_state.messages = []
     st.session_state.conversation_id = None
+    st.session_state.uploaded_doc_signature = None
+
+
+def get_attached_documents(conversation_id: str):
+    """List documents already attached to a conversation, if any."""
+    if conversation_id is None:
+        return []
+    try:
+        response = requests.get(
+            f"{API_URL}/conversations/{conversation_id}/documents", timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException:
+        return []
 
 
 def load_conversation(conversation_id: str):
@@ -112,6 +131,58 @@ with st.sidebar:
 # Main chat area
 # ---------------------------------------------------------------------------
 st.title("🤖 Gen AI Chatbot")
+
+with st.expander("📎 Attach a document (PDF, TXT, or DOCX)"):
+
+    uploaded_file = st.file_uploader(
+        "Upload a document to ask questions about it in this conversation",
+        type=["pdf", "txt", "docx"],
+        key=f"uploader_{st.session_state.conversation_id or 'new'}",
+        label_visibility="collapsed",
+    )
+
+    if uploaded_file is not None:
+        signature = (uploaded_file.name, uploaded_file.size)
+
+        if signature != st.session_state.uploaded_doc_signature:
+            try:
+                if st.session_state.conversation_id is None:
+                    create_response = requests.post(f"{API_URL}/conversations", timeout=10)
+                    create_response.raise_for_status()
+                    st.session_state.conversation_id = create_response.json()["id"]
+
+                with st.spinner(f"Reading {uploaded_file.name}..."):
+                    upload_response = requests.post(
+                        f"{API_URL}/conversations/{st.session_state.conversation_id}/documents",
+                        files={"file": (uploaded_file.name, uploaded_file.getvalue())},
+                        timeout=30,
+                    )
+                    upload_response.raise_for_status()
+
+                result = upload_response.json()
+                st.session_state.uploaded_doc_signature = signature
+
+                st.success(
+                    f"**{result['filename']}** attached "
+                    f"({result['characters_extracted']:,} characters extracted). "
+                    "Ask me anything about it below!"
+                )
+
+            except requests.exceptions.RequestException as e:
+                detail = None
+                if e.response is not None:
+                    try:
+                        detail = e.response.json().get("detail")
+                    except ValueError:
+                        pass
+                st.error(f"Couldn't attach document: {detail or e}")
+
+    attached = get_attached_documents(st.session_state.conversation_id)
+    if attached:
+        st.caption(
+            "Attached to this chat: "
+            + ", ".join(f"📄 {d['filename']}" for d in attached)
+        )
 
 if not st.session_state.messages:
     st.caption("Ask me anything to get started.")

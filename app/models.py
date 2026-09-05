@@ -45,3 +45,26 @@ class Conversation(Base):
         DateTime(timezone=True),
         server_default=func.now()
     )
+
+
+class Document(Base):
+    """A file uploaded into a conversation, with its text already extracted.
+
+    The extracted text (not the original file bytes) is what gets injected
+    into the conversation's context, so we only ever store plain text here.
+    """
+
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    conversation_id = Column(String, index=True)
+
+    filename = Column(String)
+
+    content = Column(Text)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now()
+    )

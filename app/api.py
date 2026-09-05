@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -9,7 +9,10 @@ from app.services.chat_service import (
     list_conversations,
     get_conversation_messages,
     delete_conversation,
+    add_document_to_conversation,
+    get_conversation_documents,
 )
+from app.services.document_service import UnsupportedDocumentType
 from app.database import engine, Base, get_db
 
 app = FastAPI(title="Gen AI Chatbot API")
@@ -74,6 +77,19 @@ def chat(
     )
 
 
+@app.post("/conversations")
+def start_conversation(db=Depends(get_db)):
+    """Create a new, empty conversation (e.g. to attach a document before chatting)."""
+
+    conversation = create_conversation(db)
+
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "created_at": conversation.created_at,
+    }
+
+
 @app.get("/conversations")
 def get_conversations(db=Depends(get_db)):
 
@@ -110,6 +126,63 @@ def get_messages(conversation_id: str, db=Depends(get_db)):
             "created_at": m.created_at,
         }
         for m in messages
+    ]
+
+
+@app.post("/conversations/{conversation_id}/documents")
+async def upload_document(
+    conversation_id: str,
+    file: UploadFile = File(...),
+    db=Depends(get_db),
+):
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    file_bytes = await file.read()
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    try:
+        document = add_document_to_conversation(
+            db, conversation_id, file.filename, file_bytes
+        )
+    except UnsupportedDocumentType as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {
+        "id": document.id,
+        "filename": document.filename,
+        "characters_extracted": len(document.content),
+    }
+
+
+@app.get("/conversations/{conversation_id}/documents")
+def list_documents(conversation_id: str, db=Depends(get_db)):
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    documents = get_conversation_documents(db, conversation_id)
+
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "characters": len(d.content),
+        }
+        for d in documents
     ]
 
 

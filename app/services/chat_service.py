@@ -1,8 +1,9 @@
 from langchain_core.messages import (HumanMessage, AIMessage, SystemMessage,)
-from app.models import Message, Conversation
+from app.models import Message, Conversation, Document
 
 from app.llm import llm
 from app.prompts import SYSTEM_PROMPT
+from app.services.document_service import extract_text
 import uuid
 
 
@@ -13,12 +14,16 @@ def chat_service(message: str, db, conversation_id: str):
     there is no in-memory/global history to keep in sync across requests.
     """
 
+    is_first_message = (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .count()
+    ) == 0
+
     history = load_conversation_history(
         db,
         conversation_id
     )
-
-    is_first_message = len(history) == 1  # only the system prompt so far
 
     history.append(
         HumanMessage(content=message)
@@ -83,6 +88,25 @@ def load_conversation_history(db, conversation_id):
         SystemMessage(content=SYSTEM_PROMPT)
     ]
 
+    documents = get_conversation_documents(db, conversation_id)
+
+    if documents:
+
+        documents_text = "\n\n---\n\n".join(
+            f"Document: {doc.filename}\n\n{doc.content}" for doc in documents
+        )
+
+        history.append(
+            SystemMessage(
+                content=(
+                    "The user has shared the following document(s) in this "
+                    "conversation. Use them to answer questions when "
+                    "relevant, and say so if the answer isn't in them:\n\n"
+                    f"{documents_text}"
+                )
+            )
+        )
+
     for message in messages:
 
         if message.role == "user":
@@ -136,11 +160,48 @@ def get_conversation_messages(db, conversation_id):
     )
 
 
+def add_document_to_conversation(db, conversation_id, filename: str, file_bytes: bytes):
+    """Extract text from an uploaded file and attach it to a conversation.
+
+    Raises document_service.UnsupportedDocumentType for unrecognized file
+    types; the caller is expected to turn that into a 400 response.
+    """
+
+    content = extract_text(filename, file_bytes)
+
+    document = Document(
+        conversation_id=conversation_id,
+        filename=filename,
+        content=content,
+    )
+
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+
+    return document
+
+
+def get_conversation_documents(db, conversation_id):
+    """Return all documents attached to a conversation, oldest first."""
+
+    return (
+        db.query(Document)
+        .filter(Document.conversation_id == conversation_id)
+        .order_by(Document.id)
+        .all()
+    )
+
+
 def delete_conversation(db, conversation_id):
-    """Delete a conversation and all of its messages."""
+    """Delete a conversation and all of its messages and documents."""
 
     db.query(Message).filter(
         Message.conversation_id == conversation_id
+    ).delete()
+
+    db.query(Document).filter(
+        Document.conversation_id == conversation_id
     ).delete()
 
     db.query(Conversation).filter(

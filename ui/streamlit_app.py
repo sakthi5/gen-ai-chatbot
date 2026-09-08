@@ -18,7 +18,10 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        .stMainBlockContainer { max-width: 800px; padding-top: 1rem; }
+        /* Wide enough for tables/code in replies without cramming; still
+           capped so lines of plain text don't stretch too wide to read. */
+        .stMainBlockContainer { max-width: 1200px; padding-top: 0.5rem; }
+
         section[data-testid="stSidebar"] { min-width: 280px; }
 
         /* --- Sidebar: shrink the oversized header/collapse-arrow area --- */
@@ -45,7 +48,7 @@ st.markdown(
         }
         [data-testid="stSidebarUserContent"] [data-testid="stHorizontalBlock"]
             [data-testid="stColumn"]:last-child button {
-            padding: 4px 0 !important;
+            padding: 4px 5px !important;
             width: 100% !important;
         }
 
@@ -54,18 +57,34 @@ st.markdown(
             max-width: 100% !important;
         }
 
-        /* --- Sticky, centered page title --- */
-        [data-testid="stMainBlockContainer"] [data-testid="stHeading"]:first-of-type {
+        /* --- Sticky, centered page title ---
+               A sticky element can only stay pinned while scrolling within
+               the bounds of its own DIRECT PARENT's box. Streamlit wraps
+               the title in its own tiny stElementContainer (barely taller
+               than the title itself), so making the inner heading sticky
+               only "stuck" for a few px before scrolling away with that
+               wrapper. Making the *wrapper* sticky instead works, because
+               the wrapper's own parent (stVerticalBlock) spans the entire
+               conversation, giving it room to stay stuck the whole time.
+               top is offset by Streamlit's own header height (60px, fixed
+               at the very top with a much higher z-index) — at top:0 our
+               title was rendering directly underneath that header and
+               getting completely hidden behind it. */
+        [data-testid="stMainBlockContainer"] > div > [data-testid="stElementContainer"]:has(h1) {
             position: sticky;
-            top: 0;
+            top: 60px;
             z-index: 999;
-            text-align: center;
-            padding: 0.6rem 0;
-            margin: -1rem -1rem 0.5rem -1rem;
+            padding: 0.5rem 0;
+            margin: 0 0 0.5rem 0;
             background: #0e1117;
         }
+        [data-testid="stMainBlockContainer"] > div > [data-testid="stElementContainer"]:has(h1) h1 {
+            text-align: center;
+            font-size: 1.5rem !important;
+            margin: 0 !important;
+        }
         @media (prefers-color-scheme: light) {
-            [data-testid="stMainBlockContainer"] [data-testid="stHeading"]:first-of-type {
+            [data-testid="stMainBlockContainer"] > div > [data-testid="stElementContainer"]:has(h1) {
                 background: #ffffff;
             }
         }
@@ -84,13 +103,11 @@ st.markdown(
             /* Streamlit centers this by default with large auto margins —
                reset that so our flex justify-content controls alignment. */
             margin: 0 !important;
-            max-width: 75%;
+            max-width: 100%;
             padding: 10px 14px;
             border-radius: 16px;
         }
-        [data-testid="stChatMessageContent"] p {
-            margin-bottom: 0;
-        }
+        
         [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"])
             [data-testid="stChatMessageContent"] {
             background: #6c5ce7;
@@ -120,6 +137,7 @@ st.markdown(
         [data-testid="stChatInputFileUploadButton"] {
             position: relative;
         }
+        
         /* Suppress Streamlit's own native "Upload a file" tooltip so only
            our custom one (below) shows — otherwise the two overlap. This
            app doesn't use `help=` tooltips anywhere else, so hiding the

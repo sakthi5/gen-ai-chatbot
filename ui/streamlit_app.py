@@ -19,8 +19,15 @@ st.markdown(
     """
     <style>
         /* Wide enough for tables/code in replies without cramming; still
-           capped so lines of plain text don't stretch too wide to read. */
-        .stMainBlockContainer { max-width: 1200px; padding-top: 0.5rem; }
+           capped so lines of plain text don't stretch too wide to read.
+           padding-top: 60px matches Streamlit's own header height. The
+           sticky title below is pinned at top:60px too — without this,
+           the title's *reserved* flow space (based on where it would
+           naturally sit, ~8px from the top) didn't match where it
+           actually rendered once stuck (60px), and whatever followed it
+           (e.g. the "Attached:" caption) would render into that gap and
+           peek out from behind/above the title while scrolling. */
+        .stMainBlockContainer { max-width: 1200px; padding-top: 60px; }
 
         section[data-testid="stSidebar"] { min-width: 280px; }
 

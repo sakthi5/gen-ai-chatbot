@@ -542,6 +542,7 @@ if prompt:
 
             placeholder = st.empty()
             full_response = ""
+            image_was_generated = False
 
             try:
                 with st.spinner("Thinking..."):
@@ -561,6 +562,8 @@ if prompt:
                 if new_conversation_id:
                     st.session_state.conversation_id = new_conversation_id
 
+                image_was_generated = response.headers.get("X-Image-Generated") == "true"
+
                 for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
                     if chunk:
                         full_response += chunk
@@ -575,7 +578,16 @@ if prompt:
                     "Make sure the FastAPI server is running (`uvicorn app.api:app --reload --port 8020`)."
                 )
 
-        if full_response:
+        if image_was_generated:
+            # The assistant's reply came with a generated image attached —
+            # reload from the backend instead of manually appending, so the
+            # image (which /chat's plain-text stream can't carry) shows up
+            # immediately rather than only after the conversation is
+            # reopened.
+            load_conversation(st.session_state.conversation_id)
+            st.rerun()
+
+        elif full_response:
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": full_response,

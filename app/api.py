@@ -16,7 +16,7 @@ from app.services.chat_service import (
     get_message_images,
 )
 from app.services.document_service import UnsupportedDocumentType
-from app.services.image_gen_service import ImageGenerationError
+from app.services.image_gen_service import ImageGenerationError, looks_like_image_request
 from app.services.document_export_service import build_docx, build_pdf
 from app.database import engine, Base, get_db
 
@@ -68,6 +68,34 @@ def chat(
 
         if exists is None:
             raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    # A message with an attached image is a vision question, not a request
+    # to generate a new one — only check generation intent when there's no
+    # image already in this turn.
+    if not request.images and looks_like_image_request(request.message):
+
+        try:
+            assistant_message, _image = generate_and_save_image(
+                db, conversation_id, request.message
+            )
+
+            def image_reply():
+                yield assistant_message.content
+
+            return StreamingResponse(
+                image_reply(),
+                media_type="text/plain",
+                headers={
+                    "X-Conversation-ID": conversation_id,
+                    "X-Image-Generated": "true",
+                }
+            )
+
+        except ImageGenerationError:
+            # Image generation failed (e.g. Pollinations is unreachable) —
+            # fall through to a normal chat reply instead of a hard error,
+            # so the user still gets *something* back.
+            pass
 
     return StreamingResponse(
         chat_service(

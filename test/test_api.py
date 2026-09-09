@@ -374,6 +374,70 @@ def test_generate_image_returns_502_on_generation_failure(monkeypatch):
     assert response.status_code == 502
 
 
+# --- Natural-language image requests via /chat -----------------------
+
+def test_chat_detects_image_request_and_generates_instead_of_replying(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.generate_and_save_image",
+        lambda db, conversation_id, prompt: _fake_generate_and_save_image(
+            db, conversation_id, prompt
+        ),
+    )
+
+    response = client.post("/chat", json={"message": "can you generate a dog image?"})
+
+    assert response.status_code == 200
+    assert response.headers.get("X-Image-Generated") == "true"
+    assert "dog image" in response.text  # the canned confirmation echoes the prompt
+
+    conversation_id = response.headers["X-Conversation-ID"]
+    messages = client.get(f"/conversations/{conversation_id}/messages").json()
+    assistant_reply = next(m for m in messages if m["role"] == "assistant")
+    assert len(assistant_reply["images"]) == 1
+
+
+def test_chat_with_image_request_and_attached_image_prefers_vision(fake_llm):
+    """Attaching an image is a vision question, not a generation request,
+    even if the wording also happens to match the image-request heuristic."""
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "can you describe this image?",
+            "images": [{
+                "filename": "test.png",
+                "mime_type": "image/png",
+                "data_base64": TINY_PNG_BASE64,
+            }],
+        },
+    )
+
+    assert response.headers.get("X-Image-Generated") is None
+    assert response.text == "It shows a red robot."  # from the vision fake, not image-gen
+
+
+def test_chat_falls_back_to_normal_reply_when_image_generation_fails(monkeypatch, fake_llm):
+    from app.services.image_gen_service import ImageGenerationError
+
+    def broken(db, conversation_id, prompt):
+        raise ImageGenerationError("upstream is down")
+
+    monkeypatch.setattr("app.api.generate_and_save_image", broken)
+
+    response = client.post("/chat", json={"message": "please draw a sunset"})
+
+    assert response.status_code == 200
+    assert response.headers.get("X-Image-Generated") is None
+    assert response.text == "Hello world!"  # normal fake_llm reply, not an error
+
+
+def test_chat_with_ordinary_message_does_not_trigger_image_generation(fake_llm):
+    response = client.post("/chat", json={"message": "What is RAG?"})
+
+    assert response.headers.get("X-Image-Generated") is None
+    assert response.text == "Hello world!"
+
+
 # --- Document export --------------------------------------------------
 
 def test_export_conversation_as_docx():

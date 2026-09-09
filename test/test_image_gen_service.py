@@ -1,6 +1,28 @@
 import pytest
 
-from app.services.image_gen_service import generate_image, ImageGenerationError
+from app.services.image_gen_service import (
+    generate_image,
+    looks_like_image_request,
+    ImageGenerationError,
+)
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("can you generate a dog image?", True),
+    ("generate an image of a sunset", True),
+    ("create a picture of a robot", True),
+    ("please make a logo for my startup", True),
+    ("paint an illustration of a forest", True),
+    ("draw me a cat", True),
+    ("please draw a sunset over mountains", True),
+    ("paint a picture of a lighthouse", True),
+    ("can you generate a summary of this document?", False),
+    ("what is RAG?", False),
+    ("generate a random number between 1 and 10", False),
+    ("what did you draw from this conclusion?", False),
+])
+def test_looks_like_image_request(message, expected):
+    assert looks_like_image_request(message) is expected
 
 
 def test_generate_image_returns_bytes(monkeypatch):

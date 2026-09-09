@@ -146,6 +146,18 @@ level. The prompt and resulting image are saved as a normal exchange in the
 conversation (with a download button), so it shows up in history like any
 other turn.
 
+You don't have to use the dedicated panel — typing something like *"can you
+generate a dog image?"* or *"draw me a sunset"* directly into the normal
+chat box works too. `POST /chat` checks the message against a keyword
+heuristic (`looks_like_image_request` in `app/services/image_gen_service.py`)
+before deciding whether to reply normally or generate an image; if image
+generation fails for any reason, it falls back to a normal chat reply
+instead of erroring out. This is a simple heuristic, not real intent
+understanding, so a genuinely informational question like *"how do
+diffusion models generate images"* could occasionally misfire — an accepted
+tradeoff for a free, instant check instead of spending an extra LLM call on
+every message just to classify intent.
+
 ### Document export
 
 The "⬇️ Export conversation" panel in the sidebar renders the full

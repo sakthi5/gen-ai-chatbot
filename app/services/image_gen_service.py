@@ -1,3 +1,4 @@
+import re
 import urllib.parse
 
 import requests
@@ -10,6 +11,38 @@ IMAGE_GEN_URL = "https://image.pollinations.ai/prompt/{prompt}"
 
 DEFAULT_WIDTH = 768
 DEFAULT_HEIGHT = 768
+
+
+# Simple keyword heuristic so typing "can you generate a dog image?" into
+# the normal chat box works too, not just the dedicated "Generate an image"
+# panel — requires an action verb AND an image-ish noun so plain questions
+# like "generate a summary" don't misfire. It's not real intent
+# understanding, so an informational question like "how do diffusion
+# models generate images" will still (rarely) trigger generation instead
+# of being answered — an accepted tradeoff for a fast, free heuristic
+# instead of spending an extra LLM call just to classify every message.
+IMAGE_REQUEST_PATTERN = re.compile(
+    r"\b(generate|create|draw|paint|make|produce|design)\b"
+    r".{0,40}?"
+    r"\b(image|picture|photo|drawing|painting|illustration|artwork|logo|icon)s?\b",
+    re.IGNORECASE,
+)
+
+# "draw"/"paint" alone (no separate "picture"/"image" noun needed) are
+# unambiguous enough as commands — "draw me a cat", "paint a sunset" — to
+# match without the stricter two-word pairing above.
+DRAW_OR_PAINT_COMMAND_PATTERN = re.compile(
+    r"^\s*(?:can you |could you |please )?(draw|paint)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_image_request(message: str) -> bool:
+    """Heuristic: does this message look like a request to generate an image?"""
+    return bool(
+        IMAGE_REQUEST_PATTERN.search(message)
+        or DRAW_OR_PAINT_COMMAND_PATTERN.search(message)
+    )
 
 
 class ImageGenerationError(RuntimeError):

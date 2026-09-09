@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
+from pydantic import BaseModel
 
 from app.models import ChatRequest, Conversation
 from app.services.chat_service import (
@@ -11,8 +12,12 @@ from app.services.chat_service import (
     delete_conversation,
     add_document_to_conversation,
     get_conversation_documents,
+    generate_and_save_image,
+    get_message_images,
 )
 from app.services.document_service import UnsupportedDocumentType
+from app.services.image_gen_service import ImageGenerationError
+from app.services.document_export_service import build_docx, build_pdf
 from app.database import engine, Base, get_db
 
 app = FastAPI(title="Gen AI Chatbot API")
@@ -68,7 +73,8 @@ def chat(
         chat_service(
             request.message,
             db,
-            conversation_id
+            conversation_id,
+            images=request.images,
         ),
         media_type="text/plain",
         headers={
@@ -124,6 +130,14 @@ def get_messages(conversation_id: str, db=Depends(get_db)):
             "role": m.role,
             "content": m.content,
             "created_at": m.created_at,
+            "images": [
+                {
+                    "filename": img.filename,
+                    "mime_type": img.mime_type,
+                    "data_base64": img.data_base64,
+                }
+                for img in get_message_images(db, m.id)
+            ],
         }
         for m in messages
     ]
@@ -184,6 +198,81 @@ def list_documents(conversation_id: str, db=Depends(get_db)):
         }
         for d in documents
     ]
+
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    conversation_id: str | None = None
+
+
+@app.post("/generate-image")
+def create_image(request: GenerateImageRequest, db=Depends(get_db)):
+    if not request.prompt or not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    conversation_id = request.conversation_id
+
+    if conversation_id is None:
+        conversation_id = create_conversation(db).id
+    else:
+        exists = (
+            db.query(Conversation)
+            .filter(Conversation.id == conversation_id)
+            .first()
+        )
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    try:
+        assistant_message, image = generate_and_save_image(
+            db, conversation_id, request.prompt
+        )
+    except ImageGenerationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return {
+        "conversation_id": conversation_id,
+        "message": assistant_message.content,
+        "image": {
+            "filename": image.filename,
+            "mime_type": image.mime_type,
+            "data_base64": image.data_base64,
+        },
+    }
+
+
+@app.get("/conversations/{conversation_id}/export")
+def export_conversation(conversation_id: str, format: str = "docx", db=Depends(get_db)):
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    if format not in ("docx", "pdf"):
+        raise HTTPException(status_code=400, detail="format must be 'docx' or 'pdf'.")
+
+    messages = get_conversation_messages(db, conversation_id)
+
+    if format == "docx":
+        file_bytes = build_docx(conversation.title, messages)
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        file_bytes = build_pdf(conversation.title, messages)
+        media_type = "application/pdf"
+
+    safe_title = "".join(c for c in conversation.title if c.isalnum() or c in " -_").strip() or "conversation"
+
+    return Response(
+        content=file_bytes,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_title}.{format}"'
+        },
+    )
 
 
 @app.delete("/conversations/{conversation_id}")

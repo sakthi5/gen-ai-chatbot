@@ -40,13 +40,14 @@ class FakeChunk:
 
 
 class FakeLLM:
-    def __init__(self):
+    def __init__(self, chunks=("Hello ", "world!")):
         self.last_stream_messages = None
+        self.chunks = chunks
 
     def stream(self, messages):
         self.last_stream_messages = messages
-        yield FakeChunk("Hello ")
-        yield FakeChunk("world!")
+        for chunk in self.chunks:
+            yield FakeChunk(chunk)
 
     def invoke(self, _messages):
         # Stands in for the LLM-generated title call.
@@ -55,10 +56,13 @@ class FakeLLM:
 
 @pytest.fixture(autouse=True)
 def fake_llm(monkeypatch):
-    """Avoid real Groq API calls in tests by stubbing the LLM entirely."""
+    """Avoid real Groq API calls in tests by stubbing both LLMs entirely."""
 
-    fake = FakeLLM()
+    fake = FakeLLM(("Hello ", "world!"))
+    fake_vision = FakeLLM(("It shows ", "a red robot."))
     monkeypatch.setattr("app.services.chat_service.llm", fake)
+    monkeypatch.setattr("app.services.chat_service.vision_llm", fake_vision)
+    fake.vision = fake_vision
     return fake
 
 
@@ -221,3 +225,192 @@ def test_chat_includes_attached_document_in_llm_context(fake_llm):
 
     sent_contents = [m.content for m in fake_llm.last_stream_messages]
     assert any("The secret word is banana." in c for c in sent_contents)
+
+
+# --- Vision (image understanding) ---------------------------------------
+
+TINY_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+def test_chat_with_image_routes_to_vision_model(fake_llm):
+    response = client.post(
+        "/chat",
+        json={
+            "message": "What color is this?",
+            "images": [
+                {
+                    "filename": "test.png",
+                    "mime_type": "image/png",
+                    "data_base64": TINY_PNG_BASE64,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == "It shows a red robot."  # from fake_llm.vision, not fake_llm
+
+    # The regular text model should never have been called for this turn.
+    assert fake_llm.last_stream_messages is None
+
+
+def test_chat_with_image_strips_think_tags_and_persists_clean_text(monkeypatch):
+    thinking_llm = FakeLLM(("<think>hmm let me look</think>", "It's a cat."))
+    monkeypatch.setattr("app.services.chat_service.vision_llm", thinking_llm)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "What is this?",
+            "images": [{
+                "filename": "test.png",
+                "mime_type": "image/png",
+                "data_base64": TINY_PNG_BASE64,
+            }],
+        },
+    )
+    conversation_id = response.headers["X-Conversation-ID"]
+
+    # The <think> block shouldn't reach the client...
+    assert "<think>" not in response.text
+    assert response.text.strip() == "It's a cat."
+
+    # ...nor get saved to the DB.
+    messages = client.get(f"/conversations/{conversation_id}/messages").json()
+    assistant_reply = next(m for m in messages if m["role"] == "assistant")
+    assert "<think>" not in assistant_reply["content"]
+
+
+def test_uploaded_image_is_replayed_in_later_turns(fake_llm):
+    first = client.post(
+        "/chat",
+        json={
+            "message": "What is in this image?",
+            "images": [{
+                "filename": "test.png",
+                "mime_type": "image/png",
+                "data_base64": TINY_PNG_BASE64,
+            }],
+        },
+    )
+    conversation_id = first.headers["X-Conversation-ID"]
+
+    # A follow-up with no new image should still route to the vision model
+    # and still carry the original image in history.
+    client.post(
+        "/chat",
+        json={"message": "Are you sure?", "conversation_id": conversation_id},
+    )
+
+    sent = fake_llm.vision.last_stream_messages
+    human_messages_with_images = [
+        m for m in sent
+        if isinstance(m.content, list)
+        and any(block.get("type") == "image_url" for block in m.content)
+    ]
+    assert len(human_messages_with_images) == 1
+
+
+# --- Image generation -----------------------------------------------------
+
+def test_generate_image_creates_conversation_and_saves_image(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.generate_and_save_image",
+        lambda db, conversation_id, prompt: _fake_generate_and_save_image(db, conversation_id, prompt),
+    )
+
+    response = client.post("/generate-image", json={"prompt": "a red robot"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["conversation_id"]
+    assert body["image"]["mime_type"] == "image/jpeg"
+    assert body["image"]["data_base64"] == "ZmFrZS1pbWFnZS1ieXRlcw=="
+
+
+def _fake_generate_and_save_image(db, conversation_id, prompt):
+    from app.models import Message, Image
+
+    assistant_message = Message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=f'Here\'s the image I generated for: "{prompt}"',
+    )
+    db.add(assistant_message)
+    db.flush()
+
+    image = Image(
+        conversation_id=conversation_id,
+        message_id=assistant_message.id,
+        source="generated",
+        filename="fake.jpg",
+        mime_type="image/jpeg",
+        data_base64="ZmFrZS1pbWFnZS1ieXRlcw==",  # base64("fake-image-bytes")
+        prompt=prompt,
+    )
+    db.add(image)
+    db.commit()
+    db.refresh(assistant_message)
+    db.refresh(image)
+    return assistant_message, image
+
+
+def test_generate_image_rejects_empty_prompt():
+    response = client.post("/generate-image", json={"prompt": "   "})
+    assert response.status_code == 400
+
+
+def test_generate_image_returns_502_on_generation_failure(monkeypatch):
+    from app.services.image_gen_service import ImageGenerationError
+
+    def broken(db, conversation_id, prompt):
+        raise ImageGenerationError("upstream is down")
+
+    monkeypatch.setattr("app.api.generate_and_save_image", broken)
+
+    response = client.post("/generate-image", json={"prompt": "anything"})
+    assert response.status_code == 502
+
+
+# --- Document export --------------------------------------------------
+
+def test_export_conversation_as_docx():
+    conversation_id = client.post("/chat", json={"message": "Hello there"}).headers[
+        "X-Conversation-ID"
+    ]
+
+    response = client.get(f"/conversations/{conversation_id}/export?format=docx")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert len(response.content) > 0
+
+
+def test_export_conversation_as_pdf():
+    conversation_id = client.post("/chat", json={"message": "Hello there"}).headers[
+        "X-Conversation-ID"
+    ]
+
+    response = client.get(f"/conversations/{conversation_id}/export?format=pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.content.startswith(b"%PDF")
+
+
+def test_export_conversation_rejects_bad_format():
+    conversation_id = client.post("/chat", json={"message": "Hello there"}).headers[
+        "X-Conversation-ID"
+    ]
+
+    response = client.get(f"/conversations/{conversation_id}/export?format=exe")
+    assert response.status_code == 400
+
+
+def test_export_unknown_conversation_returns_404():
+    response = client.get("/conversations/does-not-exist/export?format=docx")
+    assert response.status_code == 404

@@ -1,6 +1,15 @@
+import base64
 import os
 import streamlit as st
 import requests
+
+DOCUMENT_EXTENSIONS = {"pdf", "txt", "docx"}
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
+
+# Images are sent inline as base64 in the /chat JSON body (not a separate
+# multipart upload like documents), so keep them small enough that the
+# request stays fast — base64 inflates size by roughly a third.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB
 
 # Overridable via env var in case 8020 is also taken on your machine, e.g.:
 #   API_URL=http://127.0.0.1:8030 streamlit run ui/streamlit_app.py
@@ -153,7 +162,7 @@ st.markdown(
             display: none !important;
         }
         [data-testid="stChatInputFileUploadButton"]:hover::after {
-            content: "Attach a document (PDF, TXT, or DOCX)\A No file chosen\A 200MB per file • PDF, TXT, DOCX";
+            content: "Attach a document or image\A No file chosen\A PDF, TXT, DOCX, PNG, JPG, WEBP";
             white-space: pre-line;
             position: absolute;
             bottom: 100%;
@@ -183,6 +192,14 @@ if "messages" not in st.session_state:
 
 if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = None
+
+if "export_bytes" not in st.session_state:
+    st.session_state.export_bytes = None
+
+if "export_ready_for" not in st.session_state:
+    # (conversation_id, format) the currently-held export_bytes are for —
+    # so switching chats or formats doesn't offer a stale download.
+    st.session_state.export_ready_for = None
 
 
 def start_new_chat():
@@ -214,7 +231,7 @@ def load_conversation(conversation_id: str):
         response.raise_for_status()
 
         st.session_state.messages = [
-            {"role": m["role"], "content": m["content"]}
+            {"role": m["role"], "content": m["content"], "images": m.get("images", [])}
             for m in response.json()
         ]
         st.session_state.conversation_id = conversation_id
@@ -267,6 +284,58 @@ def attach_documents(files):
     return attached_names
 
 
+def _extension(filename: str) -> str:
+    return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+
+def _mime_type_for(extension: str) -> str:
+    return {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+    }.get(extension, "application/octet-stream")
+
+
+def encode_images_for_chat(files):
+    """Base64-encode image attachments for inline use in the /chat request.
+
+    Returns (image_payloads, rejected_filenames) — files over the size
+    limit are skipped rather than silently truncated or sent anyway.
+    """
+
+    payloads = []
+    rejected = []
+
+    for file in files:
+        if file.size > MAX_IMAGE_BYTES:
+            rejected.append(file.name)
+            continue
+
+        payloads.append({
+            "filename": file.name,
+            "mime_type": _mime_type_for(_extension(file.name)),
+            "data_base64": base64.b64encode(file.getvalue()).decode("utf-8"),
+        })
+
+    return payloads, rejected
+
+
+def render_message_images(images, key_prefix: str):
+    """Render any images attached to a chat message, with a download button."""
+
+    for i, image in enumerate(images):
+        image_bytes = base64.b64decode(image["data_base64"])
+        st.image(image_bytes)
+        st.download_button(
+            "⬇️ Download image",
+            data=image_bytes,
+            file_name=image.get("filename", "image.jpg"),
+            mime=image.get("mime_type", "image/jpeg"),
+            key=f"dl_img_{key_prefix}_{i}",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Sidebar — conversation list
 # ---------------------------------------------------------------------------
@@ -313,6 +382,49 @@ with st.sidebar:
                             start_new_chat()
                         st.rerun()
 
+    st.divider()
+
+    with st.expander("⬇️ Export conversation"):
+
+        if st.session_state.conversation_id is None:
+            st.caption("Start a conversation first.")
+
+        else:
+            export_format = st.radio(
+                "Format", ["DOCX", "PDF"], horizontal=True, key="export_format_choice"
+            )
+            fmt = export_format.lower()
+
+            if st.button("Prepare download", use_container_width=True, key="prepare_export_button"):
+                try:
+                    with st.spinner(f"Building {export_format}..."):
+                        export_response = requests.get(
+                            f"{API_URL}/conversations/{st.session_state.conversation_id}/export",
+                            params={"format": fmt},
+                            timeout=30,
+                        )
+                        export_response.raise_for_status()
+
+                    st.session_state.export_bytes = export_response.content
+                    st.session_state.export_ready_for = (st.session_state.conversation_id, fmt)
+
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Couldn't export: {e}")
+
+            if st.session_state.export_ready_for == (st.session_state.conversation_id, fmt):
+                mime = (
+                    "application/pdf" if fmt == "pdf"
+                    else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+                st.download_button(
+                    "⬇️ Download",
+                    data=st.session_state.export_bytes,
+                    file_name=f"conversation.{fmt}",
+                    mime=mime,
+                    use_container_width=True,
+                    key="download_export_button",
+                )
+
 # ---------------------------------------------------------------------------
 # Main chat area
 # ---------------------------------------------------------------------------
@@ -322,42 +434,109 @@ attached = get_attached_documents(st.session_state.conversation_id)
 if attached:
     st.caption("📎 Attached: " + ", ".join(d["filename"] for d in attached))
 
-if not st.session_state.messages:
-    st.caption("Ask me anything to get started, or attach a document below.")
+with st.expander("🎨 Generate an image"):
 
-for message in st.session_state.messages:
+    image_prompt = st.text_input(
+        "Describe the image you want",
+        key="image_gen_prompt",
+        label_visibility="collapsed",
+        placeholder="e.g. a red robot waving, cartoon style",
+    )
+
+    if st.button("Generate", key="generate_image_button"):
+
+        if not image_prompt.strip():
+            st.warning("Enter a description first.")
+
+        else:
+            try:
+                with st.spinner("Generating image..."):
+                    gen_response = requests.post(
+                        f"{API_URL}/generate-image",
+                        json={
+                            "prompt": image_prompt,
+                            "conversation_id": st.session_state.conversation_id,
+                        },
+                        timeout=60,
+                    )
+                    gen_response.raise_for_status()
+
+                result = gen_response.json()
+                st.session_state.conversation_id = result["conversation_id"]
+
+                st.session_state.messages.append({
+                    "role": "user",
+                    "content": f"🎨 Generate an image: {image_prompt}",
+                    "images": [],
+                })
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": result["message"],
+                    "images": [result["image"]],
+                })
+                st.rerun()
+
+            except requests.exceptions.RequestException as e:
+                detail = None
+                if e.response is not None:
+                    try:
+                        detail = e.response.json().get("detail")
+                    except ValueError:
+                        pass
+                st.error(f"Couldn't generate image: {detail or e}")
+
+if not st.session_state.messages:
+    st.caption("Ask me anything to get started, attach a document/image, or generate one above.")
+
+for msg_index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        render_message_images(message.get("images", []), key_prefix=f"hist_{msg_index}")
 
 prompt = st.chat_input(
     "Enter your question:",
     accept_file=True,
-    file_type=["pdf", "txt", "docx"],
+    file_type=sorted(DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS),
     max_upload_size=200,
 )
 
 if prompt:
 
     user_text = (prompt.text or "").strip()
-    attached_names = attach_documents(prompt.files)
+
+    document_files = [f for f in prompt.files if _extension(f.name) in DOCUMENT_EXTENSIONS]
+    image_files = [f for f in prompt.files if _extension(f.name) in IMAGE_EXTENSIONS]
+
+    attached_names = attach_documents(document_files)
+    image_payloads, rejected_images = encode_images_for_chat(image_files)
+
+    for name in rejected_images:
+        st.error(f"{name} is over the 8MB limit for images — try a smaller file.")
+
+    has_files = attached_names or image_payloads
 
     # Nothing to send to the model (just an attachment, no question) — show
     # the attachment and stop here instead of calling /chat with nothing.
-    if not user_text and attached_names:
+    if not user_text and has_files and not image_payloads:
         st.rerun()
 
-    elif user_text or attached_names:
+    elif user_text or has_files:
 
-        message_to_send = user_text or "Please read and explain the attached document."
+        message_to_send = user_text or "Please read and explain the attached document/image."
 
         display_text = message_to_send
         if attached_names:
             display_text = "📎 " + ", ".join(attached_names) + "\n\n" + message_to_send
 
-        st.session_state.messages.append({"role": "user", "content": display_text})
+        st.session_state.messages.append({
+            "role": "user",
+            "content": display_text,
+            "images": image_payloads,
+        })
 
         with st.chat_message("user"):
             st.markdown(display_text)
+            render_message_images(image_payloads, key_prefix="pending")
 
         with st.chat_message("assistant"):
 
@@ -371,6 +550,7 @@ if prompt:
                         json={
                             "message": message_to_send,
                             "conversation_id": st.session_state.conversation_id,
+                            "images": image_payloads,
                         },
                         stream=True,
                         timeout=60,
@@ -396,5 +576,9 @@ if prompt:
                 )
 
         if full_response:
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": full_response,
+                "images": [],
+            })
             st.rerun()

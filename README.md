@@ -11,7 +11,10 @@ A full-stack AI chatbot built with **FastAPI**, **Streamlit**, **LangChain**, an
 - ➕ **New Chat** — start a fresh conversation at any time
 - 🛡️ **Error handling** — backend validates input and surfaces clean errors; the UI reports connection/streaming failures instead of crashing
 - 📎 **Document Q&A** — attach a PDF, TXT, or DOCX file to a conversation and ask questions about it; the extracted text is added to that conversation's context
-- 🧪 **Tested** — a pytest suite covers the API's chat, history, conversation-management, and document endpoints (with the LLM stubbed out, so tests don't burn real API calls)
+- 🖼️ **Image understanding (vision)** — attach a PNG/JPG/WEBP and ask about it; routes to a vision-capable Groq model, and the image stays in context for follow-up questions
+- 🎨 **Image generation** — describe an image in a prompt and get one generated (via Pollinations.ai, free/keyless), with a download button
+- ⬇️ **Document export** — download any conversation's transcript as DOCX or PDF
+- 🧪 **Tested** — a pytest suite covers the API's chat, history, conversation-management, document, image, and export endpoints (with the LLM and image-gen API stubbed out, so tests don't burn real API calls or hit the network)
 
 ## Project Status
 
@@ -24,9 +27,11 @@ ui/streamlit_app.py   →  Streamlit frontend (chat UI + sidebar)
         │  HTTP (requests, streamed)
         ▼
 app/api.py             →  FastAPI backend (routes)
-app/services/chat_service.py     → chat + conversation logic
-app/services/document_service.py → PDF/TXT/DOCX text extraction
-app/llm.py              →  Groq LLM client (LangChain)
+app/services/chat_service.py           → chat + conversation logic, vision routing
+app/services/document_service.py       → PDF/TXT/DOCX text extraction
+app/services/image_gen_service.py      → text-to-image via Pollinations.ai
+app/services/document_export_service.py → DOCX/PDF transcript export
+app/llm.py              →  Groq LLM clients (text + vision, via LangChain)
 app/models.py           →  Pydantic request schema + SQLAlchemy models
 app/database.py         →  SQLAlchemy engine/session (SQLite)
 ```
@@ -107,17 +112,46 @@ Tests stub out the Groq LLM call and use an isolated in-memory database, so they
 | `POST` | `/conversations` | Create a new, empty conversation |
 | `POST` | `/conversations/{id}/documents` | Upload a PDF/TXT/DOCX file to attach to a conversation |
 | `GET` | `/conversations/{id}/documents` | List documents attached to a conversation |
-| `DELETE` | `/conversations/{id}` | Delete a conversation and its messages/documents |
+| `POST` | `/generate-image` | Generate an image from a text prompt |
+| `GET` | `/conversations/{id}/export` | Download the conversation transcript (`?format=docx` or `?format=pdf`) |
+| `DELETE` | `/conversations/{id}` | Delete a conversation and its messages/documents/images |
 
 ### Document Q&A
 
-Attach a file in the "📎 Attach a document" section above the chat box. Its
-text is extracted and added to that conversation's context — every question
-you ask afterward can reference it. This is the "whole document in context"
-approach (not chunked retrieval/RAG), so it works best for documents up to a
-few thousand words; very long documents are truncated (see
-`MAX_DOCUMENT_CHARACTERS` in `app/services/document_service.py`) to leave
-room for the actual conversation.
+Attach a file via the attach icon in the chat input. Its text is extracted
+and added to that conversation's context — every question you ask afterward
+can reference it. This is the "whole document in context" approach (not
+chunked retrieval/RAG), so it works best for documents up to a few thousand
+words; very long documents are truncated (see `MAX_DOCUMENT_CHARACTERS` in
+`app/services/document_service.py`) to leave room for the actual conversation.
+
+### Image understanding (vision)
+
+Attach a PNG/JPG/WEBP the same way as a document, and ask about it. This
+routes that turn to a separate vision-capable Groq model (`qwen/qwen3.6-27b`
+in `app/llm.py`) instead of the regular text model — the main model
+(`openai/gpt-oss-20b`) is text-only. The image is stored (base64, in SQLite)
+tied to the specific message it was sent with, and gets replayed in that
+turn whenever conversation history is rebuilt, so follow-up questions about
+an image from a few messages back still work. Capped at 8MB per image
+client-side to keep requests fast, since images are sent inline as base64
+in the `/chat` JSON body rather than as a separate upload.
+
+### Image generation
+
+The "🎨 Generate an image" panel above the chat box calls
+[Pollinations.ai](https://github.com/pollinations/pollinations) — a free
+text-to-image API that needs no signup or API key for this project's usage
+level. The prompt and resulting image are saved as a normal exchange in the
+conversation (with a download button), so it shows up in history like any
+other turn.
+
+### Document export
+
+The "⬇️ Export conversation" panel in the sidebar renders the full
+transcript as a DOCX (via `python-docx`) or PDF (via `fpdf2`) and offers it
+as a download. `<think>...</think>` reasoning blocks the vision model emits
+are stripped from both the export and the conversation itself before saving.
 
 ## Screenshots
 
@@ -136,6 +170,8 @@ _Add a screenshot of the chat UI here, e.g. `docs/screenshot.png` linked as `![C
 - FastAPI
 - Streamlit
 - LangChain + langchain-groq
-- Groq API
+- Groq API (text model + vision model)
+- Pollinations.ai (image generation)
 - SQLAlchemy + SQLite
+- python-docx, pypdf, fpdf2 (document read/export)
 - pytest

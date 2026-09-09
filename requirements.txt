@@ -72,9 +72,10 @@ websockets==15.0.1
 xxhash==3.8.1
 zstandard==0.25.0
 
-# Document upload / text extraction
+# Document upload / text extraction / export
 pypdf==6.17.0
 python-docx==1.2.0
+fpdf2==2.8.8
 
 # Dev/test dependencies
 pytest==9.1.1

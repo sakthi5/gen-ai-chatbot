@@ -120,10 +120,22 @@ Tests stub out the Groq LLM call and use an isolated in-memory database, so they
 
 Attach a file via the attach icon in the chat input. Its text is extracted
 and added to that conversation's context — every question you ask afterward
-can reference it. This is the "whole document in context" approach (not
-chunked retrieval/RAG), so it works best for documents up to a few thousand
-words; very long documents are truncated (see `MAX_DOCUMENT_CHARACTERS` in
-`app/services/document_service.py`) to leave room for the actual conversation.
+can reference it, since the document is resent in full on *every* message
+in that conversation, not just once. This is the "whole document in
+context" approach (not chunked retrieval/RAG), so it works best for
+short-to-medium documents; longer ones are truncated (see
+`MAX_DOCUMENT_CHARACTERS` in `app/services/document_service.py`, currently
+8,000 characters) to leave room for the system prompt, conversation
+history, and the model's answer within a single request.
+
+That cap is set conservatively because Groq's free/on-demand tier has a
+fairly low per-minute token budget (e.g. 8,000 TPM for `openai/gpt-oss-20b`
+at the time this was tuned) — and since the document resends on every
+message, a large document eats into that budget repeatedly, not once. If
+you're on a paid Groq tier with a higher limit, `MAX_DOCUMENT_CHARACTERS`
+can safely be raised. A request that's still too large fails with a clear
+in-chat message (rather than a raw API error) suggesting a shorter document
+or a new conversation.
 
 ### Image understanding (vision)
 

@@ -467,12 +467,7 @@ if prompt:
 
     has_files = attached_names or image_payloads
 
-    # Nothing to send to the model (just an attachment, no question) — show
-    # the attachment and stop here instead of calling /chat with nothing.
-    if not user_text and has_files and not image_payloads:
-        st.rerun()
-
-    elif user_text or has_files:
+    if user_text or has_files:
 
         message_to_send = user_text or "Please read and explain the attached document/image."
 

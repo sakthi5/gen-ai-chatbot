@@ -123,7 +123,16 @@ def chat_service(message: str, db, conversation_id: str, images=None):
 
         # Persist whatever we managed to stream before the failure, so the
         # conversation history stays consistent, then surface the error.
-        error_note = f"\n\n_[Error: response interrupted — {exc}]_"
+        if "rate_limit_exceeded" in str(exc) or "tokens per minute" in str(exc):
+            error_note = (
+                "\n\n_[This conversation (plus any attached documents) is "
+                "too large for the current API plan's per-minute token "
+                "limit. Try starting a new conversation, attaching a "
+                "shorter document, or waiting a minute before retrying.]_"
+            )
+        else:
+            error_note = f"\n\n_[Error: response interrupted — {exc}]_"
+
         full_response += error_note
         yield error_note
 
@@ -306,10 +315,27 @@ def add_document_to_conversation(db, conversation_id, filename: str, file_bytes:
     """Extract text from an uploaded file and attach it to a conversation.
 
     Raises document_service.UnsupportedDocumentType for unrecognized file
-    types; the caller is expected to turn that into a 400 response.
+    types; the caller is expected to turn that into a 400 response. If the
+    exact same filename+content is already attached to this conversation,
+    returns the existing row instead of creating a duplicate — e.g. if a
+    user attaches a file, nothing visibly happens because there's no
+    question with it, and they try again.
     """
 
     content = extract_text(filename, file_bytes)
+
+    existing = (
+        db.query(Document)
+        .filter(
+            Document.conversation_id == conversation_id,
+            Document.filename == filename,
+            Document.content == content,
+        )
+        .first()
+    )
+
+    if existing:
+        return existing
 
     document = Document(
         conversation_id=conversation_id,

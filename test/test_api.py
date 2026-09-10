@@ -82,6 +82,24 @@ def test_chat_creates_conversation_and_streams_reply():
     assert conversation_id
 
 
+def test_chat_shows_friendly_message_on_rate_limit_error(monkeypatch):
+    class RateLimitedLLM:
+        def stream(self, _messages):
+            raise RuntimeError(
+                "Error code: 413 - {'error': {'message': 'Request too large "
+                "... on tokens per minute (TPM)', 'code': 'rate_limit_exceeded'}}"
+            )
+            yield  # pragma: no cover - unreachable, makes this a generator
+
+    monkeypatch.setattr("app.services.chat_service.llm", RateLimitedLLM())
+
+    response = client.post("/chat", json={"message": "Explain this document"})
+
+    assert response.status_code == 200
+    assert "too large for the current API plan" in response.text
+    assert "rate_limit_exceeded" not in response.text  # no raw error dumped
+
+
 def test_chat_rejects_empty_message():
     response = client.post("/chat", json={"message": "   "})
     assert response.status_code == 400
@@ -189,6 +207,25 @@ def test_upload_document_and_list_it():
     documents = client.get(f"/conversations/{conversation_id}/documents").json()
     assert len(documents) == 1
     assert documents[0]["filename"] == "notes.txt"
+
+
+def test_uploading_the_same_document_twice_does_not_duplicate_it():
+    """A user re-attaching the same file (e.g. after nothing seemed to
+    happen the first time) shouldn't end up with the same document twice
+    in context."""
+
+    conversation_id = client.post("/conversations").json()["id"]
+    file_args = {"file": ("notes.txt", b"The secret word is banana.", "text/plain")}
+
+    first = client.post(f"/conversations/{conversation_id}/documents", files=file_args)
+    second = client.post(f"/conversations/{conversation_id}/documents", files=file_args)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+
+    documents = client.get(f"/conversations/{conversation_id}/documents").json()
+    assert len(documents) == 1
 
 
 def test_upload_unsupported_document_type_returns_400():

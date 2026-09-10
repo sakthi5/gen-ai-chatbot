@@ -4,10 +4,16 @@ from pypdf import PdfReader
 from docx import Document as DocxDocument
 
 # Simple approach: the whole extracted document is injected into the
-# conversation's context (see chat_service.load_conversation_history), so we
-# cap how much text we keep per document to leave room for the actual
-# conversation and the model's answer. ~20k characters is roughly 5k tokens.
-MAX_DOCUMENT_CHARACTERS = 20_000
+# conversation's context on EVERY message (see
+# chat_service.load_conversation_history), not just once — so its size
+# eats into the same per-minute token budget repeatedly, not a one-time
+# cost. Groq's free/on-demand tier caps openai/gpt-oss-20b at 8,000
+# tokens/minute total (prompt + expected output); a single ~16k-character
+# document alone (~4k tokens) left too little room for the system prompt,
+# conversation history, and the model's answer, and reliably 413'd
+# ("Request too large ... on tokens per minute"). 8,000 characters is
+# roughly 2k tokens — leaves real headroom for everything else.
+MAX_DOCUMENT_CHARACTERS = 8_000
 
 SUPPORTED_EXTENSIONS = (".pdf", ".txt", ".docx")
 

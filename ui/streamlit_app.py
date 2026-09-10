@@ -434,59 +434,11 @@ attached = get_attached_documents(st.session_state.conversation_id)
 if attached:
     st.caption("📎 Attached: " + ", ".join(d["filename"] for d in attached))
 
-with st.expander("🎨 Generate an image"):
-
-    image_prompt = st.text_input(
-        "Describe the image you want",
-        key="image_gen_prompt",
-        label_visibility="collapsed",
-        placeholder="e.g. a red robot waving, cartoon style",
-    )
-
-    if st.button("Generate", key="generate_image_button"):
-
-        if not image_prompt.strip():
-            st.warning("Enter a description first.")
-
-        else:
-            try:
-                with st.spinner("Generating image..."):
-                    gen_response = requests.post(
-                        f"{API_URL}/generate-image",
-                        json={
-                            "prompt": image_prompt,
-                            "conversation_id": st.session_state.conversation_id,
-                        },
-                        timeout=60,
-                    )
-                    gen_response.raise_for_status()
-
-                result = gen_response.json()
-                st.session_state.conversation_id = result["conversation_id"]
-
-                st.session_state.messages.append({
-                    "role": "user",
-                    "content": f"🎨 Generate an image: {image_prompt}",
-                    "images": [],
-                })
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": result["message"],
-                    "images": [result["image"]],
-                })
-                st.rerun()
-
-            except requests.exceptions.RequestException as e:
-                detail = None
-                if e.response is not None:
-                    try:
-                        detail = e.response.json().get("detail")
-                    except ValueError:
-                        pass
-                st.error(f"Couldn't generate image: {detail or e}")
-
 if not st.session_state.messages:
-    st.caption("Ask me anything to get started, attach a document/image, or generate one above.")
+    st.caption(
+        "Ask me anything to get started, attach a document/image, "
+        "or just ask me to generate one (e.g. \"draw a red robot waving\")."
+    )
 
 for msg_index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):

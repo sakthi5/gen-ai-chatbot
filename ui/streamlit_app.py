@@ -11,9 +11,9 @@ IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 # request stays fast — base64 inflates size by roughly a third.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB
 
-# Overridable via env var in case 8020 is also taken on your machine, e.g.:
+# Overridable via env var in case 8025 is also taken on your machine, e.g.:
 #   API_URL=http://127.0.0.1:8030 streamlit run ui/streamlit_app.py
-API_URL = os.getenv("CHATBOT_API_URL", "http://127.0.0.1:8020")
+API_URL = os.getenv("CHATBOT_API_URL", "http://127.0.0.1:8025")
 
 st.set_page_config(
     page_title="Gen AI Chatbot",
@@ -522,7 +522,7 @@ if prompt:
                 full_response = ""
                 placeholder.error(
                     f"Something went wrong talking to the backend: {e}\n\n"
-                    "Make sure the FastAPI server is running (`uvicorn app.api:app --reload --port 8020`)."
+                    "Make sure the FastAPI server is running (`uvicorn app.api:app --reload --port 8025`)."
                 )
 
         if image_was_generated:

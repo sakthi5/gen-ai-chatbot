@@ -45,7 +45,10 @@ def chat_service(message: str, db, conversation_id: str, images=None):
     vision-capable model instead of the regular text model.
     """
 
-    images = images or []
+    # Defensive cap: the UI only ever lets one file be attached per message,
+    # but a direct API call could send more than the vision model allows
+    # per request. Keep the most recent ones if so, rather than 400ing.
+    images = (images or [])[-MAX_VISION_IMAGES_PER_REQUEST:]
 
     is_first_message = (
         db.query(Message)
@@ -55,7 +58,8 @@ def chat_service(message: str, db, conversation_id: str, images=None):
 
     history = load_conversation_history(
         db,
-        conversation_id
+        conversation_id,
+        current_turn_image_count=len(images),
     )
 
     history.append(
@@ -156,7 +160,17 @@ def chat_service(message: str, db, conversation_id: str, images=None):
         if is_first_message:
             maybe_set_conversation_title(db, conversation_id, message)
 
-def load_conversation_history(db, conversation_id):
+# The vision model rejects any single request carrying more than this many
+# images ("Too many images provided. This model supports up to 3 images").
+# Since every past uploaded image gets replayed on every turn (so follow-up
+# questions about it keep working), a conversation that accumulates more
+# than this many images over its lifetime would otherwise permanently
+# break — every future message in it would 400, even ones with no new
+# image at all. See the budget logic below.
+MAX_VISION_IMAGES_PER_REQUEST = 3
+
+
+def load_conversation_history(db, conversation_id, current_turn_image_count=0):
 
     messages = (
         db.query(Message)
@@ -188,14 +202,40 @@ def load_conversation_history(db, conversation_id):
             )
         )
 
+    # Only replay as many historical images as fit alongside whatever new
+    # ones this turn is about to add, keeping the MOST RECENT ones (most
+    # likely relevant to the current question) and dropping older ones —
+    # those turns still keep their text, just without the image attached.
+    images_by_message_id = {
+        message.id: (
+            db.query(Image)
+            .filter(Image.message_id == message.id, Image.source == "uploaded")
+            .all()
+        )
+        for message in messages
+        if message.role == "user"
+    }
+
+    remaining_budget = max(MAX_VISION_IMAGES_PER_REQUEST - current_turn_image_count, 0)
+    allowed_message_ids = set()
+
+    for message in reversed(messages):
+        imgs = images_by_message_id.get(message.id)
+        if not imgs:
+            continue
+        if len(imgs) > remaining_budget:
+            continue
+        allowed_message_ids.add(message.id)
+        remaining_budget -= len(imgs)
+
     for message in messages:
 
         if message.role == "user":
 
             uploaded_images = (
-                db.query(Image)
-                .filter(Image.message_id == message.id, Image.source == "uploaded")
-                .all()
+                images_by_message_id.get(message.id, [])
+                if message.id in allowed_message_ids
+                else []
             )
 
             history.append(

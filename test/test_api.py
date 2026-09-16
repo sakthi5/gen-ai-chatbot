@@ -350,6 +350,56 @@ def test_uploaded_image_is_replayed_in_later_turns(fake_llm):
     assert len(human_messages_with_images) == 1
 
 
+def _count_image_blocks(messages):
+    total = 0
+    for m in messages:
+        if isinstance(m.content, list):
+            total += sum(1 for block in m.content if block.get("type") == "image_url")
+    return total
+
+
+def test_conversation_with_many_images_stays_under_the_per_request_cap(fake_llm):
+    """The vision model rejects any single request with more than 3 images.
+    Since every past uploaded image is normally replayed on every turn, a
+    conversation that accumulates more than that over its lifetime must not
+    permanently break — older images should drop out of replay instead."""
+
+    conversation_id = None
+
+    def send_image(caption):
+        nonlocal conversation_id
+        response = client.post(
+            "/chat",
+            json={
+                "message": caption,
+                "conversation_id": conversation_id,
+                "images": [{
+                    "filename": f"{caption}.png",
+                    "mime_type": "image/png",
+                    "data_base64": TINY_PNG_BASE64,
+                }],
+            },
+        )
+        conversation_id = response.headers["X-Conversation-ID"]
+
+    # Upload 5 images across 5 separate turns — well over the cap of 3.
+    for i in range(5):
+        send_image(f"image {i}")
+
+    # This turn has no new image, so all 3 slots of budget are available
+    # for replaying history — but there are 4 prior images, so one must
+    # be dropped.
+    client.post("/chat", json={"message": "summarize all of them", "conversation_id": conversation_id})
+
+    sent = fake_llm.vision.last_stream_messages
+    assert _count_image_blocks(sent) <= 3
+
+    # A turn that itself attaches a new image leaves less budget for replay.
+    send_image("image 5")
+    sent = fake_llm.vision.last_stream_messages
+    assert _count_image_blocks(sent) <= 3
+
+
 # --- Image generation -----------------------------------------------------
 
 def test_generate_image_creates_conversation_and_saves_image(monkeypatch):

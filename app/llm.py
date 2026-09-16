@@ -14,6 +14,14 @@ llm = ChatGroq(
 # gpt-oss-20b above is text-only, so any turn with an image attached gets
 # routed to this model instead (see chat_service.is_vision_turn).
 #
+# Model name note: Groq's vision-capable Qwen model has moved version
+# numbers before (was qwen/qwen3.6-27b when this was first wired up; that
+# ID was retired and returned 404 "model_not_found" — Groq's hosted model
+# lineup changes over time). If this ever 404s again, check what's
+# actually available to this account with:
+#   from groq import Groq; Groq(api_key=...).models.list()
+# and swap the model name below to whatever's current.
+#
 # reasoning_effort="none" turns off this model's default "think out loud
 # in <think>...</think> before answering" behavior. Two problems, one
 # fix: (1) that reasoning could run long enough on its own to exceed the
@@ -26,7 +34,7 @@ llm = ChatGroq(
 # reasoning step at all. max_tokens is still capped as a sane ceiling.
 vision_llm = ChatGroq(
     api_key=GROQ_API_KEY,
-    model="qwen/qwen3.6-27b",
+    model="qwen/qwen3.8-27b",
     temperature=0.3,
     streaming=True,
     max_tokens=700,

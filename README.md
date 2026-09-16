@@ -140,9 +140,13 @@ or a new conversation.
 ### Image understanding (vision)
 
 Attach a PNG/JPG/WEBP the same way as a document, and ask about it. This
-routes that turn to a separate vision-capable Groq model (`qwen/qwen3.6-27b`
+routes that turn to a separate vision-capable Groq model (`qwen/qwen3.8-27b`
 in `app/llm.py`) instead of the regular text model — the main model
-(`openai/gpt-oss-20b`) is text-only. The image is stored (base64, in SQLite)
+(`openai/gpt-oss-20b`) is text-only. Groq's available model lineup shifts
+over time (this one replaced `qwen3.6-27b` after that ID was retired); if
+vision requests start 404ing with `model_not_found`, check
+`Groq(api_key=...).models.list()` for what's currently available and
+update the model name in `app/llm.py`. The image is stored (base64, in SQLite)
 tied to the specific message it was sent with, and gets replayed in that
 turn whenever conversation history is rebuilt, so follow-up questions about
 an image from a few messages back still work. Capped at 8MB per image

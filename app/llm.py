@@ -10,6 +10,7 @@ llm = ChatGroq(
     streaming=True,
 )
 
+
 # A separate, vision-capable model for messages that include an image.
 # gpt-oss-20b above is text-only, so any turn with an image attached gets
 # routed to this model instead (see chat_service.is_vision_turn).

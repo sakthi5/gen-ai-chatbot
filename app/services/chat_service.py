@@ -169,6 +169,17 @@ def chat_service(message: str, db, conversation_id: str, images=None):
 # image at all. See the budget logic below.
 MAX_VISION_IMAGES_PER_REQUEST = 3
 
+# Images older than this many messages ago are dropped from replay
+# entirely (not just capped by count above). Without this, a conversation
+# that ever touched an image stays permanently routed to the vision model
+# and keeps resending that image forever — so even a later one-word reply
+# like "thanks" carries the accumulated image(s) + growing text history,
+# which can alone exceed the account's per-minute token budget and fail,
+# even though the trivial new message obviously didn't need an image.
+# Aging old images out lets a conversation naturally fall back to the
+# cheaper text-only model once it's moved on from discussing them.
+VISION_IMAGE_RECENCY_WINDOW = 6
+
 
 def load_conversation_history(db, conversation_id, current_turn_image_count=0):
 
@@ -206,14 +217,16 @@ def load_conversation_history(db, conversation_id, current_turn_image_count=0):
     # ones this turn is about to add, keeping the MOST RECENT ones (most
     # likely relevant to the current question) and dropping older ones —
     # those turns still keep their text, just without the image attached.
+    recent_cutoff_index = max(0, len(messages) - VISION_IMAGE_RECENCY_WINDOW)
+
     images_by_message_id = {
         message.id: (
             db.query(Image)
             .filter(Image.message_id == message.id, Image.source == "uploaded")
             .all()
         )
-        for message in messages
-        if message.role == "user"
+        for i, message in enumerate(messages)
+        if message.role == "user" and i >= recent_cutoff_index
     }
 
     remaining_budget = max(MAX_VISION_IMAGES_PER_REQUEST - current_turn_image_count, 0)

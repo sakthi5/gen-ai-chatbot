@@ -503,7 +503,12 @@ def test_chat_with_image_request_and_attached_image_prefers_vision(fake_llm):
     assert response.text == "It shows a red robot."  # from the vision fake, not image-gen
 
 
-def test_chat_falls_back_to_normal_reply_when_image_generation_fails(monkeypatch, fake_llm):
+def test_chat_reports_image_generation_unavailable_instead_of_silent_fallback(monkeypatch, fake_llm):
+    """If image generation fails, say so clearly — don't silently pass the
+    request to the text model, which doesn't know an image was attempted
+    and would respond as if the feature doesn't exist at all (e.g. offering
+    ASCII art), confusing users into thinking generation isn't supported."""
+
     from app.services.image_gen_service import ImageGenerationError
 
     def broken(db, conversation_id, prompt):
@@ -515,7 +520,14 @@ def test_chat_falls_back_to_normal_reply_when_image_generation_fails(monkeypatch
 
     assert response.status_code == 200
     assert response.headers.get("X-Image-Generated") is None
-    assert response.text == "Hello world!"  # normal fake_llm reply, not an error
+    assert "temporarily unavailable" in response.text
+    # The text model must never have been called for this turn.
+    assert fake_llm.last_stream_messages is None
+
+    conversation_id = response.headers["X-Conversation-ID"]
+    messages = client.get(f"/conversations/{conversation_id}/messages").json()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "please draw a sunset"
 
 
 def test_chat_with_ordinary_message_does_not_trigger_image_generation(fake_llm):

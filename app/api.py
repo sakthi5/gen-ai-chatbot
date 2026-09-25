@@ -1,9 +1,11 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 
-from app.models import ChatRequest, Conversation
+from app.models import ChatRequest, Conversation, Message
 from app.services.chat_service import (
     chat_service,
     create_conversation,
@@ -20,7 +22,21 @@ from app.services.image_gen_service import ImageGenerationError, looks_like_imag
 from app.services.document_export_service import build_docx, build_pdf
 from app.database import engine, Base, get_db
 
-app = FastAPI(title="Gen AI Chatbot API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Runs once when the server actually starts — not on every import of
+    # this module. Previously this was a bare module-level call, which
+    # meant just importing `app.api` (e.g. for the test suite, which uses
+    # its own separate in-memory database) also connected to and touched
+    # the real chatbot.db. That made tests fail if the real dev server
+    # happened to be mid-transaction at that moment ("database is
+    # locked") — tests should never depend on the live app's DB state at
+    # all, let alone require it to not be running.
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(title="Gen AI Chatbot API", lifespan=lifespan)
 
 # Allow the Streamlit frontend (or any local dev client) to call the API.
 app.add_middleware(
@@ -31,8 +47,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Conversation-ID"],
 )
-
-Base.metadata.create_all(bind=engine)
 
 
 @app.get("/")
@@ -92,10 +106,37 @@ def chat(
             )
 
         except ImageGenerationError:
-            # Image generation failed (e.g. Pollinations is unreachable) —
-            # fall through to a normal chat reply instead of a hard error,
-            # so the user still gets *something* back.
-            pass
+            # Image generation failed (Pollinations is free/keyless and has
+            # no uptime guarantee — this happens). Falling through silently
+            # to a normal chat reply here used to mean the text model would
+            # answer as if image generation didn't exist at all — e.g.
+            # "I can't create images, here's ASCII art instead" — which
+            # looks like a missing feature rather than a temporary hiccup.
+            # Say clearly what actually happened instead.
+            user_message = Message(
+                conversation_id=conversation_id, role="user", content=request.message
+            )
+            assistant_message = Message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=(
+                    "I tried to generate that image, but the image service "
+                    "is temporarily unavailable — it's a free service with "
+                    "no uptime guarantee. Please try again in a moment."
+                ),
+            )
+            db.add(user_message)
+            db.add(assistant_message)
+            db.commit()
+
+            def unavailable_reply():
+                yield assistant_message.content
+
+            return StreamingResponse(
+                unavailable_reply(),
+                media_type="text/plain",
+                headers={"X-Conversation-ID": conversation_id},
+            )
 
     return StreamingResponse(
         chat_service(

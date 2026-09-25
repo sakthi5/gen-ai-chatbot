@@ -17,8 +17,11 @@ __pycache__/
 # Logs
 *.log
 
-# Local SQLite database
+# Local SQLite database (including WAL-mode's auxiliary files)
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 
 
 # File/Folder	Reason

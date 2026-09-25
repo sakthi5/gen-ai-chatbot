@@ -41,3 +41,4 @@ vision_llm = ChatGroq(
     max_tokens=700,
     reasoning_effort="none",
 )
+

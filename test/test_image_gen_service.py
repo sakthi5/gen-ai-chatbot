@@ -78,6 +78,53 @@ def test_generate_image_rejects_empty_prompt():
         generate_image("   ")
 
 
+def test_generate_image_omits_auth_header_without_a_key(monkeypatch):
+    """No POLLINATIONS_API_KEY set — the request should be fully anonymous
+    (no Authorization header), same as before this was added."""
+
+    monkeypatch.setattr("app.services.image_gen_service.POLLINATIONS_API_KEY", None)
+
+    captured = {}
+
+    class FakeResponse:
+        content = b"fake-jpeg-bytes"
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, params, headers, timeout):
+        captured["headers"] = headers
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.image_gen_service.requests.get", fake_get)
+
+    generate_image("a red robot")
+    assert "Authorization" not in captured["headers"]
+
+
+def test_generate_image_sends_auth_header_when_key_is_set(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.image_gen_service.POLLINATIONS_API_KEY", "test-key-123"
+    )
+
+    captured = {}
+
+    class FakeResponse:
+        content = b"fake-jpeg-bytes"
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, params, headers, timeout):
+        captured["headers"] = headers
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.image_gen_service.requests.get", fake_get)
+
+    generate_image("a red robot")
+    assert captured["headers"]["Authorization"] == "Bearer test-key-123"
+
+
 def test_generate_image_wraps_network_errors(monkeypatch):
     import requests
 

@@ -3,6 +3,8 @@ import urllib.parse
 
 import requests
 
+from app.config import POLLINATIONS_API_KEY
+
 # Pollinations.ai — free, keyless text-to-image API. A plain GET request
 # with the prompt URL-encoded into the path returns image bytes directly.
 # No API key or account needed for this project's usage level; see
@@ -109,6 +111,15 @@ def generate_image(prompt: str) -> bytes:
     encoded_prompt = urllib.parse.quote(prompt.strip())
     url = IMAGE_GEN_URL.format(prompt=encoded_prompt)
 
+    headers = {"User-Agent": "gen-ai-chatbot/1.0"}
+
+    # nologo=true only actually removes the watermark for a registered
+    # account — anonymous/keyless requests get it stamped on regardless of
+    # this param. Free key: https://enter.pollinations.ai. Also generally
+    # gets a higher rate limit than fully anonymous requests.
+    if POLLINATIONS_API_KEY:
+        headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
+
     try:
         response = requests.get(
             url,
@@ -117,7 +128,7 @@ def generate_image(prompt: str) -> bytes:
                 "height": DEFAULT_HEIGHT,
                 "nologo": "true",
             },
-            headers={"User-Agent": "gen-ai-chatbot/1.0"},
+            headers=headers,
             timeout=60,
         )
         response.raise_for_status()

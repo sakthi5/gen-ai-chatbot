@@ -67,6 +67,18 @@ GROQ_API_KEY=your_groq_api_key_here
 
 Get a free key at [console.groq.com](https://console.groq.com/).
 
+Optionally, also add:
+
+```
+POLLINATIONS_API_KEY=your_pollinations_api_key_here
+```
+
+This is for image generation and is **not required** — it works fully
+anonymously with no key at all. Without one, generated images get a small
+"pollinations.ai" watermark in the corner and a lower rate limit. A free
+account at [enter.pollinations.ai](https://enter.pollinations.ai) removes
+the watermark and raises the rate limit, at no cost.
+
 ### 4. Run the backend
 
 ```bash
@@ -160,24 +172,29 @@ in the `/chat` JSON body rather than as a separate upload.
 
 ### Image generation
 
-The "🎨 Generate an image" panel above the chat box calls
-[Pollinations.ai](https://github.com/pollinations/pollinations) — a free
-text-to-image API that needs no signup or API key for this project's usage
-level. The prompt and resulting image are saved as a normal exchange in the
+Just ask for one in the normal chat box — *"generate a dog image"*, *"draw
+me a sunset"*, *"can you make a logo for my startup"*. There's no dedicated
+button; `POST /chat` checks the message against a keyword heuristic
+(`looks_like_image_request` in `app/services/image_gen_service.py`) before
+deciding whether to reply normally or generate an image. This is a simple
+heuristic, not real intent understanding, so a genuinely informational
+question like *"how do diffusion models generate images"* could
+occasionally misfire — an accepted tradeoff for a free, instant check
+instead of spending an extra LLM call on every message just to classify
+intent.
+
+Calls [Pollinations.ai](https://github.com/pollinations/pollinations) — a
+free text-to-image API that needs no signup for basic use (see
+`POLLINATIONS_API_KEY` in Setup above for the optional free key that
+removes its watermark). Your message is trimmed down to just the subject
+before being sent as the prompt (`extract_image_prompt`) — sending the
+whole raw message, including words like "generate"/"image" themselves,
+was found to reliably fail against Pollinations' API. If generation fails
+anyway (the free tier has no uptime guarantee), the reply says so clearly
+rather than silently falling back to a confusing unrelated text answer.
+The prompt and resulting image are saved as a normal exchange in the
 conversation (with a download button), so it shows up in history like any
 other turn.
-
-You don't have to use the dedicated panel — typing something like *"can you
-generate a dog image?"* or *"draw me a sunset"* directly into the normal
-chat box works too. `POST /chat` checks the message against a keyword
-heuristic (`looks_like_image_request` in `app/services/image_gen_service.py`)
-before deciding whether to reply normally or generate an image; if image
-generation fails for any reason, it falls back to a normal chat reply
-instead of erroring out. This is a simple heuristic, not real intent
-understanding, so a genuinely informational question like *"how do
-diffusion models generate images"* could occasionally misfire — an accepted
-tradeoff for a free, instant check instead of spending an extra LLM call on
-every message just to classify intent.
 
 ### Document export
 

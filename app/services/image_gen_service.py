@@ -45,6 +45,52 @@ def looks_like_image_request(message: str) -> bool:
     )
 
 
+# Pollinations reliably 500s on prompts that still contain the *meta* words
+# from the request itself ("generate", "image", etc.) rather than just the
+# subject — confirmed directly: "generate a cute cat image" and "generate a
+# red robot image" failed consistently, while the bare subjects ("a cute
+# cat", "a red robot") succeeded every time. This isn't random flakiness —
+# it's the raw chat message being sent as the literal prompt. Strip the
+# request phrasing down to just the subject before ever calling the API.
+_LEADING_POLITE_WRAPPER = re.compile(
+    r"^(can you|could you|please|would you)\s+", re.IGNORECASE
+)
+_LEADING_ACTION_VERB = re.compile(
+    r"^(generate|create|draw|paint|make|produce|design)\s+(me\s+)?",
+    re.IGNORECASE,
+)
+_TRAILING_IMAGE_NOUN = re.compile(
+    r"\s+(image|picture|photo|drawing|painting|illustration|artwork)s?[?.!]*$",
+    re.IGNORECASE,
+)
+_LEADING_IMAGE_NOUN_OF = re.compile(
+    r"^(an?\s+)?(image|picture|photo|drawing|painting|illustration|artwork|logo|icon)s?"
+    r"\s+(of|showing|depicting)\s+",
+    re.IGNORECASE,
+)
+
+
+def extract_image_prompt(message: str) -> str:
+    """Strip generation-request phrasing down to just the image's subject.
+
+    e.g. "generate a cute cat image" -> "a cute cat"
+         "can you draw me a sunset?" -> "a sunset"
+         "paint a picture of a lighthouse" -> "a lighthouse"
+
+    Falls back to the original message if stripping would leave nothing
+    (better to send something than an empty prompt).
+    """
+
+    text = message.strip()
+    text = _LEADING_POLITE_WRAPPER.sub("", text)
+    text = _LEADING_ACTION_VERB.sub("", text)
+    text = _TRAILING_IMAGE_NOUN.sub("", text)
+    text = _LEADING_IMAGE_NOUN_OF.sub("", text)
+    text = text.strip().rstrip("?.!").strip()
+
+    return text or message
+
+
 class ImageGenerationError(RuntimeError):
     """Raised when the image generation API fails or returns something unusable."""
 

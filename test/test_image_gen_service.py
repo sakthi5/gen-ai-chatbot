@@ -3,6 +3,7 @@ import pytest
 from app.services.image_gen_service import (
     generate_image,
     looks_like_image_request,
+    extract_image_prompt,
     ImageGenerationError,
 )
 
@@ -23,6 +24,37 @@ from app.services.image_gen_service import (
 ])
 def test_looks_like_image_request(message, expected):
     assert looks_like_image_request(message) is expected
+
+
+@pytest.mark.parametrize("message,expected", [
+    # These two are the actual bug: Pollinations reliably 500s on prompts
+    # that still contain the request's own meta-words ("generate", "image").
+    ("generate a cute cat image", "a cute cat"),
+    ("generate a red robot image", "a red robot"),
+    ("can you generate a dog image?", "a dog"),
+    ("draw me a cat", "a cat"),
+    ("please draw a sunset over mountains", "a sunset over mountains"),
+    ("paint a picture of a lighthouse", "a lighthouse"),
+    ("create a picture of a robot", "a robot"),
+    ("design an icon of a mountain", "a mountain"),
+    # A subject that happens to contain an image-noun word as itself
+    # (not "X of Y") should be left alone rather than losing "logo".
+    ("please make a logo for my startup", "a logo for my startup"),
+    # Already-clean prompts (e.g. from a direct API call) pass through
+    # unchanged.
+    ("a red robot", "a red robot"),
+])
+def test_extract_image_prompt(message, expected):
+    assert extract_image_prompt(message) == expected
+
+
+def test_extract_image_prompt_never_returns_empty_string_for_sparse_input():
+    # generate_image() itself rejects an empty prompt outright, so
+    # extraction must never hand it one for realistic sparse input (an
+    # actually-empty message can't reach here — looks_like_image_request
+    # never matches empty text in the first place).
+    for message in ["draw", "generate", "draw me"]:
+        assert extract_image_prompt(message) != ""
 
 
 def test_generate_image_returns_bytes(monkeypatch):

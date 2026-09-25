@@ -8,7 +8,7 @@ from app.models import Message, Conversation, Document, Image
 from app.llm import llm, vision_llm
 from app.prompts import SYSTEM_PROMPT
 from app.services.document_service import extract_text
-from app.services.image_gen_service import generate_image
+from app.services.image_gen_service import generate_image, extract_image_prompt
 
 
 def _strip_think_tags(text: str) -> str:
@@ -325,13 +325,22 @@ def generate_and_save_image(db, conversation_id: str, prompt: str):
         .count()
     ) == 0
 
-    image_bytes = generate_image(prompt)
+    # `prompt` here is often the user's whole raw chat message (e.g.
+    # "generate a cute cat image"), not just the subject — sending that
+    # verbatim to Pollinations was found to reliably 500, specifically
+    # because it still contains meta-words like "generate"/"image"
+    # rather than just what to draw. The cleaned version is what actually
+    # gets sent, captioned, and titled; the user's own message is saved
+    # unchanged below regardless.
+    clean_prompt = extract_image_prompt(prompt)
+
+    image_bytes = generate_image(clean_prompt)
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
     user_message = Message(
         conversation_id=conversation_id,
         role="user",
-        content=f"🎨 Generate an image: {prompt}",
+        content=f"🎨 Generate an image: {clean_prompt}",
     )
     db.add(user_message)
     db.flush()
@@ -339,7 +348,7 @@ def generate_and_save_image(db, conversation_id: str, prompt: str):
     assistant_message = Message(
         conversation_id=conversation_id,
         role="assistant",
-        content=f'Here\'s the image I generated for: "{prompt}"',
+        content=f'Here\'s the image I generated for: "{clean_prompt}"',
     )
     db.add(assistant_message)
     db.flush()
@@ -351,7 +360,7 @@ def generate_and_save_image(db, conversation_id: str, prompt: str):
         filename=f"generated_{assistant_message.id}.jpg",
         mime_type="image/jpeg",
         data_base64=image_base64,
-        prompt=prompt,
+        prompt=clean_prompt,
     )
     db.add(image)
     db.commit()
@@ -359,7 +368,7 @@ def generate_and_save_image(db, conversation_id: str, prompt: str):
     db.refresh(image)
 
     if is_first_message:
-        maybe_set_conversation_title(db, conversation_id, prompt)
+        maybe_set_conversation_title(db, conversation_id, clean_prompt)
 
     return assistant_message, image
 

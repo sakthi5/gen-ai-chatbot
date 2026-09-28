@@ -22,10 +22,24 @@ class UnsupportedDocumentType(ValueError):
     """Raised when a file's extension isn't one we know how to read."""
 
 
+class NoExtractableTextError(ValueError):
+    """Raised when a file was read successfully but contained no text.
+
+    The most common cause: a *scanned* PDF — a PDF made of page images
+    rather than embedded text (pypdf can only pull out text that's already
+    stored as text in the file; it doesn't do OCR). Rather than silently
+    attaching a useless, empty document — which leaves the model correctly
+    saying it can't see anything, with no indication of why — this fails
+    loudly with a clear reason.
+    """
+
+
 def extract_text(filename: str, file_bytes: bytes) -> str:
     """Extract plain text from an uploaded .pdf, .txt, or .docx file.
 
-    Raises UnsupportedDocumentType for anything else.
+    Raises UnsupportedDocumentType for anything else, or
+    NoExtractableTextError if the file contains no extractable text at all
+    (e.g. a scanned PDF with no text layer).
     """
 
     extension = _get_extension(filename)
@@ -43,6 +57,15 @@ def extract_text(filename: str, file_bytes: bytes) -> str:
         )
 
     text = text.strip()
+
+    if not text:
+        raise NoExtractableTextError(
+            f"Couldn't find any text in '{filename}'. If this is a PDF, it's "
+            "likely a scanned document (pages stored as images) — this app "
+            "reads existing text but can't OCR images, so scanned PDFs "
+            "won't work. Try a PDF with real selectable text, or a .txt/"
+            ".docx file instead."
+        )
 
     if len(text) > MAX_DOCUMENT_CHARACTERS:
         text = (

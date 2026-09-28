@@ -239,6 +239,26 @@ def test_upload_unsupported_document_type_returns_400():
     assert upload.status_code == 400
 
 
+def test_upload_document_with_no_extractable_text_returns_400():
+    """A .txt file with only whitespace has nothing to extract — same
+    failure mode as a scanned PDF with no text layer, easier to trigger
+    end-to-end without mocking pypdf."""
+
+    conversation_id = client.post("/conversations").json()["id"]
+
+    upload = client.post(
+        f"/conversations/{conversation_id}/documents",
+        files={"file": ("blank.txt", b"   \n\n   ", "text/plain")},
+    )
+
+    assert upload.status_code == 400
+    assert "blank.txt" in upload.json()["detail"]
+
+    # Nothing should have been attached.
+    documents = client.get(f"/conversations/{conversation_id}/documents").json()
+    assert documents == []
+
+
 def test_upload_document_to_unknown_conversation_returns_404():
     upload = client.post(
         "/conversations/does-not-exist/documents",

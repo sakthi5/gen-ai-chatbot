@@ -6,6 +6,7 @@ from docx import Document as DocxDocument
 from app.services.document_service import (
     extract_text,
     UnsupportedDocumentType,
+    NoExtractableTextError,
     MAX_DOCUMENT_CHARACTERS,
 )
 
@@ -47,6 +48,30 @@ def test_extract_text_from_pdf(monkeypatch):
 def test_extract_text_rejects_unsupported_extension():
     with pytest.raises(UnsupportedDocumentType):
         extract_text("archive.zip", b"whatever")
+
+
+def test_extract_text_rejects_pdf_with_no_text_layer(monkeypatch):
+    """A scanned PDF — pages are images, no embedded text. pypdf can't OCR,
+    so every page's extract_text() legitimately returns empty/None. This
+    must fail loudly instead of silently attaching a useless document."""
+
+    class FakePage:
+        def extract_text(self):
+            return ""  # what a real scanned page looks like to pypdf
+
+    class FakeReader:
+        def __init__(self, _stream):
+            self.pages = [FakePage(), FakePage()]
+
+    monkeypatch.setattr("app.services.document_service.PdfReader", FakeReader)
+
+    with pytest.raises(NoExtractableTextError, match="scanned-cert.pdf"):
+        extract_text("scanned-cert.pdf", b"%PDF-fake-bytes")
+
+
+def test_extract_text_rejects_whitespace_only_content():
+    with pytest.raises(NoExtractableTextError):
+        extract_text("blank.txt", b"   \n\n   ")
 
 
 def test_extract_text_truncates_long_documents():

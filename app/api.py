@@ -17,7 +17,7 @@ from app.services.chat_service import (
     generate_and_save_image,
     get_message_images,
 )
-from app.services.document_service import UnsupportedDocumentType
+from app.services.document_service import UnsupportedDocumentType, NoExtractableTextError
 from app.services.image_gen_service import ImageGenerationError, looks_like_image_request
 from app.services.document_export_service import build_docx, build_pdf
 from app.database import engine, Base, get_db
@@ -236,7 +236,7 @@ async def upload_document(
         document = add_document_to_conversation(
             db, conversation_id, file.filename, file_bytes
         )
-    except UnsupportedDocumentType as exc:
+    except (UnsupportedDocumentType, NoExtractableTextError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     return {
